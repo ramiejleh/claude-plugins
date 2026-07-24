@@ -104,6 +104,13 @@ If you're not inside the target repository, add an `owner/repo` slug:
 /interactive-pr-review:review 128 ramiejleh/some-repo
 ```
 
+**List** the PRs you've already analyzed and can reopen from cache (offline, no GitHub
+call):
+
+```
+/interactive-pr-review:list
+```
+
 **Reopen** a PR you already analyzed — instant, from cache, no re-analysis (unless the PR
 moved):
 
@@ -149,6 +156,7 @@ Nothing is ever posted to GitHub without your explicit confirmation.
 | --- | --- | --- |
 | Command | `/interactive-pr-review:review <pr#> [owner/repo]` | The entry point that runs the full review workflow. |
 | Command | `/interactive-pr-review:reopen <pr#> [owner/repo]` | Reopens a previously analyzed PR from cached artifacts. Fresh-only: rebuilds the UI instantly if the PR is unchanged, otherwise re-analyzes. |
+| Command | `/interactive-pr-review:list` | Lists the PRs with cached artifacts (number, title, size, age) — the ones available to reopen. Offline; no GitHub call. |
 | Command | `/interactive-pr-review:cleanup [pr#]` | Removes cached artifacts — one PR's, or all (`/tmp/pr-*`). Lists and confirms before deleting. |
 | Skill | `pr-review-ui` | Procedures for the parse → analyze → merge pipeline, building the review UI, and posting comments. The whole workflow runs in the main chat — no subagent. |
 | Scripts | `parse_diff.py`, `merge_analysis.py` | Deterministic diff parsing and analysis-merge. The diff never passes through the model. |
@@ -185,6 +193,7 @@ interactive-pr-review/
 ├── .claude-plugin/plugin.json     # manifest
 ├── commands/review.md             # /interactive-pr-review:review
 ├── commands/reopen.md             # /interactive-pr-review:reopen  (from cache, fresh-only)
+├── commands/list.md               # /interactive-pr-review:list    (cached PRs, offline)
 ├── commands/cleanup.md            # /interactive-pr-review:cleanup (remove artifacts)
 ├── skills/pr-review-ui/
 │   ├── SKILL.md                   # parse / analyze / merge / UI / post procedures
