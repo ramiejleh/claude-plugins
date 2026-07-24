@@ -1,6 +1,7 @@
 ---
 name: pr-review-ui
 description: Procedures for interactive GitHub PR review — fetch PR data with the gh CLI, group a unified diff into logical chunks (with group- and file-level AI reasoning plus inline read-only insight bubbles explaining the code) authored directly in the main chat and written to a temp JSON file, inject that data plus vendored highlight.js into a self-contained HTML review UI with a sidebar and per-file headers, collect line- and file-level comments, and post them back to GitHub as a pull request review. Use when reviewing, walking through, or commenting on a GitHub pull request by number.
+user-invocable: false
 ---
 
 # PR Review UI
