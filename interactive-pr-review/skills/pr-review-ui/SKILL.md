@@ -32,24 +32,29 @@ wants to review a PR carefully.
 Prefer the `gh` CLI. When the user gave an `owner/repo`, pass `--repo <slug>` to every
 command; otherwise `gh` uses the current directory's remote.
 
+Build the repo flag as a **bash array** (`REPO_ARGS`), not an unquoted string. zsh (the
+default macOS shell) does not word-split an unquoted `$REPO_FLAG`, so `--repo owner/name`
+would reach `gh` as one glued argument and every call would fail. `"${REPO_ARGS[@]}"`
+expands to zero or two words correctly in both bash and zsh.
+
 ```bash
 PR=<number>                       # e.g. 128
-REPO_FLAG=""                      # or: REPO_FLAG="--repo owner/name"
+REPO_ARGS=()                      # or: REPO_ARGS=(--repo owner/name)
 
 # Metadata
-gh pr view "$PR" $REPO_FLAG --json number,title,author,baseRefName,headRefName,body,url,additions,deletions,changedFiles,state,isDraft,mergeable
+gh pr view "$PR" "${REPO_ARGS[@]}" --json number,title,author,baseRefName,headRefName,body,url,additions,deletions,changedFiles,state,isDraft,mergeable
 
 # Changed files with stats and status (added/modified/removed/renamed)
-gh pr view "$PR" $REPO_FLAG --json files
+gh pr view "$PR" "${REPO_ARGS[@]}" --json files
 
 # The unified diff — save it, do not paste the whole thing around
-gh pr diff "$PR" $REPO_FLAG > /tmp/pr-$PR.diff
+gh pr diff "$PR" "${REPO_ARGS[@]}" > /tmp/pr-$PR.diff
 
 # Head commit SHA — required to anchor review comments
-HEAD_SHA=$(gh pr view "$PR" $REPO_FLAG --json commits --jq '.commits[-1].oid')
+HEAD_SHA=$(gh pr view "$PR" "${REPO_ARGS[@]}" --json commits --jq '.commits[-1].oid')
 
 # Resolve owner/repo for later gh api calls
-gh pr view "$PR" $REPO_FLAG --json url --jq '.url'   # .../{owner}/{repo}/pull/{n}
+gh pr view "$PR" "${REPO_ARGS[@]}" --json url --jq '.url'   # .../{owner}/{repo}/pull/{n}
 ```
 
 If `gh` is unavailable, fall back to the REST API with `curl` and a
@@ -62,19 +67,41 @@ The grouping JSON is built by three stages. **The diff never passes through the 
 model as output** — deterministic scripts own it; you (in the main chat) produce only the
 analysis layer, which is small. This makes the "diff is sacred" rule structural (you can't
 alter a line you never emit) and eliminates the huge-response failures that plagued the
-earlier one-shot approach. `${CLAUDE_PLUGIN_ROOT}` points at the plugin root; the scripts
-live under `skills/pr-review-ui/scripts/`.
+earlier one-shot approach. The scripts and assets live under the plugin root at
+`skills/pr-review-ui/{scripts,assets}/` — see **Resolving the plugin root** below for how to
+locate it reliably from a shell.
 
 **Run every stage in the main conversation — do not spawn a subagent.** Stages A and C are
 plain script calls. Stage B is authored by you directly: you read the parsed diff and write
 a small analysis-only JSON.
+
+### Resolving the plugin root
+
+`$CLAUDE_PLUGIN_ROOT` is only exported while one of *this plugin's own commands* is
+executing. When you run these steps as ad-hoc Bash (e.g. from `reopen`, or when driving the
+pipeline directly), that variable is **empty**, and a path like
+`$CLAUDE_PLUGIN_ROOT/skills/...` resolves to `/skills/...` and fails. Also, the Bash tool
+does not persist shell state between calls, so resolve the root **inside each bash block**
+that needs it. Use this snippet — it prefers the env var when set and otherwise discovers
+the newest installed copy in the plugin cache:
+
+```bash
+PLUGIN_ROOT="$CLAUDE_PLUGIN_ROOT"
+if [ -z "$PLUGIN_ROOT" ] || [ ! -e "$PLUGIN_ROOT/skills/pr-review-ui/SKILL.md" ]; then
+  PLUGIN_ROOT=$(ls -d "$HOME"/.claude/plugins/cache/*/interactive-pr-review/*/ 2>/dev/null | sort -V | tail -1)
+fi
+```
 
 **Stage A — parse (deterministic, no LLM).** Turn the diff into a canonical structure with
 stable `hunkId`s (`<path>#<index>`):
 
 ```bash
 PR=<number>
-SCRIPTS="$CLAUDE_PLUGIN_ROOT/skills/pr-review-ui/scripts"
+PLUGIN_ROOT="$CLAUDE_PLUGIN_ROOT"
+if [ -z "$PLUGIN_ROOT" ] || [ ! -e "$PLUGIN_ROOT/skills/pr-review-ui/SKILL.md" ]; then
+  PLUGIN_ROOT=$(ls -d "$HOME"/.claude/plugins/cache/*/interactive-pr-review/*/ 2>/dev/null | sort -V | tail -1)
+fi
+SCRIPTS="$PLUGIN_ROOT/skills/pr-review-ui/scripts"
 # Write PR metadata (from step 1) to /tmp/pr-$PR-meta.json first, e.g. with gh --json.
 python3 "$SCRIPTS/parse_diff.py" /tmp/pr-$PR.diff /tmp/pr-$PR-parsed.json --pr-json /tmp/pr-$PR-meta.json
 # -> OK parsed files: N hunks: M lines: L -> /tmp/pr-$PR-parsed.json
@@ -334,13 +361,18 @@ The template has three placeholder tokens, each appearing exactly once:
 
 Do **not** hand-edit the huge JSON into the template. Run a small script that reads the
 template, the vendored `highlight.min.js`, the vendored `hljs-github-theme.css`, and the
-groups JSON, replaces the three tokens, and writes `/tmp/pr-<number>-review.html`. The
-`${CLAUDE_PLUGIN_ROOT}` env var points at the plugin root (the skill assets live under
-`skills/pr-review-ui/assets/`).
+groups JSON, replaces the three tokens, and writes `/tmp/pr-<number>-review.html`. Resolve
+the plugin root first (see **Resolving the plugin root** in §2 — `$CLAUDE_PLUGIN_ROOT` is
+empty in ad-hoc Bash, and shell state doesn't carry between blocks, so resolve it again
+here); the skill assets live under `skills/pr-review-ui/assets/`.
 
 ```bash
 PR=<number>
-ASSETS="$CLAUDE_PLUGIN_ROOT/skills/pr-review-ui/assets"
+PLUGIN_ROOT="$CLAUDE_PLUGIN_ROOT"
+if [ -z "$PLUGIN_ROOT" ] || [ ! -e "$PLUGIN_ROOT/skills/pr-review-ui/SKILL.md" ]; then
+  PLUGIN_ROOT=$(ls -d "$HOME"/.claude/plugins/cache/*/interactive-pr-review/*/ 2>/dev/null | sort -V | tail -1)
+fi
+ASSETS="$PLUGIN_ROOT/skills/pr-review-ui/assets"
 
 python3 - "$ASSETS" "/tmp/pr-$PR-groups.json" "/tmp/pr-$PR-review.html" <<'PY'
 import json, sys, pathlib

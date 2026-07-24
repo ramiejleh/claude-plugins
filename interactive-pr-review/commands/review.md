@@ -62,7 +62,15 @@ If the PR is merged/closed with an empty diff, report the state and stop.
 The grouping JSON is built by three stages; **the diff never passes through the model as
 output**, and **every stage runs in the main chat — do not spawn a subagent.**
 
-1. **Parse (deterministic):** `python3 $CLAUDE_PLUGIN_ROOT/skills/pr-review-ui/scripts/parse_diff.py /tmp/pr-$1.diff /tmp/pr-$1-parsed.json --pr-json /tmp/pr-$1-meta.json`.
+1. **Parse (deterministic):** resolve the plugin root first (see skill §2 "Resolving the
+   plugin root" — `$CLAUDE_PLUGIN_ROOT` is empty in ad-hoc Bash), then run the parser:
+   ```bash
+   PLUGIN_ROOT="$CLAUDE_PLUGIN_ROOT"
+   if [ -z "$PLUGIN_ROOT" ] || [ ! -e "$PLUGIN_ROOT/skills/pr-review-ui/SKILL.md" ]; then
+     PLUGIN_ROOT=$(ls -d "$HOME"/.claude/plugins/cache/*/interactive-pr-review/*/ 2>/dev/null | sort -V | tail -1)
+   fi
+   python3 "$PLUGIN_ROOT/skills/pr-review-ui/scripts/parse_diff.py" /tmp/pr-$1.diff /tmp/pr-$1-parsed.json --pr-json /tmp/pr-$1-meta.json
+   ```
    This assigns stable `hunkId`s and is the byte-exact source of truth for the code.
 2. **Analyze (you, in the main chat):** read `/tmp/pr-$1-parsed.json` (and `/tmp/pr-$1.diff`
    for extra context) and author the **analysis only** — groups, neutral `reasoning`,

@@ -60,23 +60,26 @@ If `$2` (or a URL) gives an `owner/repo`, use `--repo <slug>`. Otherwise derive 
 cached PR url:
 
 ```bash
-python3 -c "import json,sys; u=json.load(open('/tmp/pr-$1-groups.json'))['pr'].get('url',''); import re; m=re.search(r'github\.com/([^/]+/[^/]+)/pull', u); print(m.group(1) if m else '')"
+SLUG=$(python3 -c "import json,sys; u=json.load(open('/tmp/pr-$1-groups.json'))['pr'].get('url',''); import re; m=re.search(r'github\.com/([^/]+/[^/]+)/pull', u); print(m.group(1) if m else '')")
 ```
 
-Use the printed slug as `--repo <slug>` for the freshness check. If it is empty and the
-user gave no `$2`, fall back to the current directory's git remote (as `review` does).
+Use `$2` if the user gave a slug; otherwise `$SLUG` from the cached url. If both are empty,
+fall back to the current directory's git remote (as `review` does).
 
 ## Step 4 — Freshness check (cached vs live head SHA)
 
-Read the cached head SHA and fetch the live one:
+Read the cached head SHA and fetch the live one. **Build the `--repo` flag as a bash array**,
+not an unquoted string — an unquoted `$REPO_FLAG` is *not* word-split by zsh (the default
+macOS shell), so `--repo owner/name` would be passed to `gh` as a single glued argument and
+the fetch would fail (yielding a false "stale" verdict). An array expands correctly to zero
+or two words in both bash and zsh:
 
 ```bash
 CACHED_SHA=$(python3 -c "import json; print(json.load(open('/tmp/pr-$1-groups.json'))['pr'].get('headSha',''))")
-LIVE_SHA=$(gh pr view $1 ${REPO_FLAG} --json commits --jq '.commits[-1].oid')
+REPO_ARGS=(); [ -n "$SLUG" ] && REPO_ARGS=(--repo "$SLUG")   # use $2's slug here if given
+LIVE_SHA=$(gh pr view $1 "${REPO_ARGS[@]}" --json commits --jq '.commits[-1].oid')
 echo "cached=$CACHED_SHA live=$LIVE_SHA"
 ```
-
-(`REPO_FLAG` is `--repo <slug>` from Step 3, or empty.)
 
 - **If `CACHED_SHA` equals `LIVE_SHA` → the cache is fresh. Go to Step 5 (reopen).**
 - **If they differ → the cache is stale. Go to Step 6 (re-analyze).**
