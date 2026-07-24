@@ -117,11 +117,14 @@ When the user pastes the JSON:
 3. Report the review URL and counts. If a comment's line isn't in the diff, name it and
    offer to repost via `gh pr comment $1`.
 
-## Step 6 — Clean up
+## Step 6 — Keep the artifacts (no auto-cleanup)
 
-After posting (or if the user abandons the review), remove the temp files per the skill:
-`rm -f /tmp/pr-$1.diff /tmp/pr-$1-meta.json /tmp/pr-$1-parsed.json /tmp/pr-$1-analysis.json /tmp/pr-$1-groups.json /tmp/pr-$1-review.html /tmp/pr-$1-review-payload.json`.
-Keep them only if the user says they're still reviewing.
+Do **not** delete the temp files. They persist by design so the review can be reopened
+later with `/interactive-pr-review:reopen $1` — which rebuilds the UI from the cached
+`/tmp/pr-$1-groups.json` without re-fetching or re-analyzing, as long as the PR's head SHA
+hasn't moved. Let the user know they can reopen #$1 anytime, and that when they're done
+they can remove the artifacts with `/interactive-pr-review:cleanup $1` (or
+`/interactive-pr-review:cleanup` to clear all cached PRs).
 
 ## Edge cases
 
@@ -131,5 +134,6 @@ Keep them only if the user says they're still reviewing.
   to text lines present in the diff.
 - **User pastes malformed JSON:** show the parse error, point at the offending field,
   ask them to re-copy from the UI.
-- **User wants to abandon:** if they don't paste JSON or say to stop, post nothing; still
-  offer to clean up temp files.
+- **User wants to abandon:** if they don't paste JSON or say to stop, post nothing. The
+  artifacts stay in `/tmp` (they can reopen or remove them later); mention
+  `/interactive-pr-review:cleanup $1` if they want to discard them now.

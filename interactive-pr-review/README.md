@@ -104,6 +104,20 @@ If you're not inside the target repository, add an `owner/repo` slug:
 /interactive-pr-review:review 128 ramiejleh/some-repo
 ```
 
+**Reopen** a PR you already analyzed — instant, from cache, no re-analysis (unless the PR
+moved):
+
+```
+/interactive-pr-review:reopen 128
+```
+
+**Clean up** cached artifacts when you're done — one PR, or all of them:
+
+```
+/interactive-pr-review:cleanup 128        # just PR 128
+/interactive-pr-review:cleanup            # every cached PR
+```
+
 ### What happens
 
 1. **Fetch** — Claude pulls the PR metadata, file list, unified diff, and head commit
@@ -122,6 +136,10 @@ If you're not inside the target repository, add an `owner/repo` slug:
 5. **Post** — Claude validates your comments, shows you a summary, and — after you
    confirm — posts them to GitHub as a single **comment** review, anchored to the exact
    lines and the PR's head commit. It never approves or requests changes.
+6. **Keep or clean** — the temp artifacts are **kept**, not auto-deleted, so you can
+   `reopen` the PR later without re-fetching or re-analyzing. Reopen is **fresh-only**: if
+   the PR's head commit has moved since it was analyzed, it re-runs the analysis instead of
+   showing a stale diff. Remove artifacts when you're done with `cleanup`.
 
 Nothing is ever posted to GitHub without your explicit confirmation.
 
@@ -130,6 +148,8 @@ Nothing is ever posted to GitHub without your explicit confirmation.
 | Type | Name | Purpose |
 | --- | --- | --- |
 | Command | `/interactive-pr-review:review <pr#> [owner/repo]` | The entry point that runs the full review workflow. |
+| Command | `/interactive-pr-review:reopen <pr#> [owner/repo]` | Reopens a previously analyzed PR from cached artifacts. Fresh-only: rebuilds the UI instantly if the PR is unchanged, otherwise re-analyzes. |
+| Command | `/interactive-pr-review:cleanup [pr#]` | Removes cached artifacts — one PR's, or all (`/tmp/pr-*`). Lists and confirms before deleting. |
 | Skill | `pr-review-ui` | Procedures for the parse → analyze → merge pipeline, building the review UI, and posting comments. The whole workflow runs in the main chat — no subagent. |
 | Scripts | `parse_diff.py`, `merge_analysis.py` | Deterministic diff parsing and analysis-merge. The diff never passes through the model. |
 | Hook | `SessionStart` gh check | Warns (non-blocking) if `gh` is missing or unauthenticated. |
@@ -164,6 +184,8 @@ The plugin structure:
 interactive-pr-review/
 ├── .claude-plugin/plugin.json     # manifest
 ├── commands/review.md             # /interactive-pr-review:review
+├── commands/reopen.md             # /interactive-pr-review:reopen  (from cache, fresh-only)
+├── commands/cleanup.md            # /interactive-pr-review:cleanup (remove artifacts)
 ├── skills/pr-review-ui/
 │   ├── SKILL.md                   # parse / analyze / merge / UI / post procedures
 │   ├── scripts/

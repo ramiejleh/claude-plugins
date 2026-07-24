@@ -23,8 +23,9 @@ wants to review a PR carefully.
 4. **The grouping JSON lives in a temp file, by design.** It is far too large to pass
    through the conversation. You author the analysis directly (in the main chat — no
    subagent) and write it to a temp file, then inject it into the HTML with a script.
-   Neither the big JSON nor the big HTML should be pasted into the main context. Clean the
-   temp files up at the end.
+   Neither the big JSON nor the big HTML should be pasted into the main context. The temp
+   files are kept afterward (so a review can be reopened) and removed only via the manual
+   `cleanup` command — never auto-deleted at the end of a review.
 
 ## 1. Fetch PR data (read-only)
 
@@ -418,17 +419,27 @@ The `event` is always `COMMENT`.
 4. **Report** the returned review URL and counts. If GitHub rejects a comment whose line
    isn't in the diff, name it and offer to repost via `gh pr comment $PR --body "…"`.
 
-## 7. Clean up temp files
+## 7. Temp files persist (manual cleanup only)
 
-After the review is posted (or the user abandons), remove the temp artifacts:
+**Do not auto-delete the artifacts.** After a review is posted (or abandoned), the temp
+files are kept on purpose so the PR can be reopened later with
+`/interactive-pr-review:reopen <PR>` — which rebuilds the UI from `/tmp/pr-$PR-groups.json`
+without re-fetching or re-analyzing (as long as the PR's head SHA hasn't moved).
+
+A PR's full artifact set is these 7 files:
 
 ```bash
-rm -f /tmp/pr-$PR.diff /tmp/pr-$PR-meta.json /tmp/pr-$PR-parsed.json \
-      /tmp/pr-$PR-analysis.json /tmp/pr-$PR-groups.json /tmp/pr-$PR-review.html \
-      /tmp/pr-$PR-review-payload.json
+/tmp/pr-$PR.diff /tmp/pr-$PR-meta.json /tmp/pr-$PR-parsed.json \
+/tmp/pr-$PR-analysis.json /tmp/pr-$PR-groups.json /tmp/pr-$PR-review.html \
+/tmp/pr-$PR-review-payload.json
 ```
 
-Leave them in place only if the user explicitly wants to keep reviewing.
+Removal is manual, via the `cleanup` command — never as an end-of-review step:
+- `/interactive-pr-review:cleanup <PR>` removes one PR's artifacts.
+- `/interactive-pr-review:cleanup` removes all cached PRs (`/tmp/pr-*`).
+
+Of the set, `/tmp/pr-$PR-groups.json` is the one that matters for reopening — it drives the
+UI and carries `pr.headSha` / `pr.url`. The others are regenerable intermediates.
 
 ### Notes & gotchas
 

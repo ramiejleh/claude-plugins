@@ -1,6 +1,6 @@
 {
   "name": "interactive-pr-review",
-  "version": "1.9.1",
+  "version": "1.10.0",
   "description": "Interactively review GitHub PRs — Claude fetches the PR, groups the diff into logical chunks with reasoning, presents them in a review UI, and posts your line comments back to GitHub.",
   "author": {
     "name": "Rami Ejleh",
@@ -20,7 +20,9 @@
     "code-insights"
   ],
   "commands": [
-    "./commands/review.md"
+    "./commands/review.md",
+    "./commands/reopen.md",
+    "./commands/cleanup.md"
   ],
   "skills": [
     "./skills/pr-review-ui"
