@@ -238,6 +238,7 @@
   /* Split (side-by-side) view: two ln|code column pairs. */
   table.diff.split td.code { width: 50%; }
   table.diff.split td.code.empty, table.diff.split td.ln.empty { background: var(--panel-2); opacity: .5; }
+  table.diff td.nodiff { padding: 10px 14px; color: var(--muted); font-style: italic; font-size: 12.5px; }
   table.diff.split td.ln.add, table.diff.split td.code.add { background: var(--add-bg); }
   table.diff.split td.ln.del, table.diff.split td.code.del { background: var(--del-bg); }
   table.diff.split tr.split-line td.code.add .marker { color: var(--add-text); }
@@ -670,6 +671,18 @@ function drawFileBody(f, body, lang) {
       table.appendChild(renderGap(f, table, lang, cols, lastEnd + 1, fullLines.length,
         "down", ins, fullLines));
     }
+  }
+  // Files with no textual hunks (binary, pure rename, mode change) still get a row, so
+  // every changed file is visibly accounted for rather than rendering blank.
+  if (!hunks.length) {
+    const note = f.status === "binary"
+      ? "Binary file — no textual diff to show."
+      : (f.status === "renamed"
+          ? "Renamed with no content change — no textual diff to show."
+          : "No textual diff to show for this file.");
+    const tr = document.createElement("tr");
+    tr.innerHTML = "<td colspan='" + cols + "' class='nodiff'>" + esc(note) + "</td>";
+    table.appendChild(tr);
   }
   body.appendChild(table);
 }

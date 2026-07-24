@@ -143,8 +143,9 @@ def main(argv):
         for h in f["hunks"]:
             hunk_by_id[h["hunkId"]] = h
 
-    assigned = {}   # hunkId -> count of groups that referenced it
-    missing = []    # referenced hunkIds that don't exist
+    assigned = {}      # hunkId -> count of groups that referenced it
+    missing = []       # referenced hunkIds that don't exist
+    shown_paths = set()  # file paths actually emitted into some themed group
 
     out_groups = []
     for g in analysis.get("groups", []):
@@ -168,7 +169,11 @@ def main(argv):
                     continue
                 assigned[hid] = assigned.get(hid, 0) + 1
                 hunks.append({k: h[k] for k in ("header", "oldStart", "newStart", "lines")})
-            if not hunks:
+            # Skip an empty entry only when the file DOES have hunks but none landed here
+            # (a redundant/duplicate group entry). A file with no hunks at all (binary,
+            # pure rename, mode change) is legitimate and must still be shown, so let it
+            # through with an empty hunks list.
+            if not hunks and pf["hunks"]:
                 continue
             # Per-group +/- counts for the subset of hunks shown here.
             add = sum(1 for h in hunks for ln in h["lines"] if ln["type"] == "add")
@@ -204,6 +209,7 @@ def main(argv):
                 "insights": insights,
                 "hunks": hunks,
             })
+            shown_paths.add(path)
         out_groups.append({
             "id": g.get("id"),
             "title": g.get("title", ""),
@@ -216,9 +222,64 @@ def main(argv):
         die("analysis referenced hunk/file ids not present in the parsed diff: "
             + ", ".join(sorted(set(missing))[:20]))
 
-    # Coverage report: hunks never assigned, or assigned to more than one group.
+    # --- Coverage guarantee: EVERY file/hunk must appear somewhere in the UI. ---
+    # The analysis may omit hunks (LLM oversight) or a file may have no hunks at all
+    # (binary, pure rename, mode change) and never be placed. Rather than silently
+    # dropping those, sweep everything not yet shown into a synthetic "Other changes"
+    # group, in the parser's original order. This is deterministic — it does not rely on
+    # the model choosing to include a file.
+    catch_files = []
+    for pf in parsed["files"]:                       # parser order = diff order
+        placed = {h["hunkId"] for h in pf["hunks"] if h["hunkId"] in assigned}
+        leftover = [h for h in pf["hunks"] if h["hunkId"] not in assigned]
+        # A file with hunks, some/all unassigned -> show the leftover hunks here.
+        # A file with NO hunks that was never surfaced in any group -> show it too.
+        shown_elsewhere = pf["path"] in shown_paths
+        if not leftover and (pf["hunks"] or shown_elsewhere):
+            continue
+        hunks = [{k: h[k] for k in ("header", "oldStart", "newStart", "lines")}
+                 for h in leftover]
+        for h in leftover:
+            assigned[h["hunkId"]] = assigned.get(h["hunkId"], 0) + 1
+        add = sum(1 for h in hunks for ln in h["lines"] if ln["type"] == "add")
+        dele = sum(1 for h in hunks for ln in h["lines"] if ln["type"] == "del")
+        catch_files.append({
+            "path": pf["path"],
+            "previousPath": pf.get("previousPath"),
+            "status": pf.get("status", "modified"),
+            "language": pf.get("language"),
+            "additions": add,
+            "deletions": dele,
+            "role": None,
+            "description": "Not assigned to a themed group above; included here so the "
+                           "review always covers every changed file.",
+            "insights": [],
+            "hunks": hunks,
+        })
+    if catch_files:
+        out_groups.append({
+            "id": "g-other",
+            "title": "Other changes",
+            "reasoning": "Files and hunks not sorted into a themed group above, collected "
+                         "here so nothing in the diff is hidden from review.",
+            "thingsToConfirm": [],
+            "files": catch_files,
+        })
+
+    # Hard invariant: after the sweep, every parsed hunk must be shown somewhere.
     all_ids = set(hunk_by_id)
-    dropped = sorted(all_ids - set(assigned))
+    still_missing = sorted(all_ids - set(assigned))
+    if still_missing:
+        die("internal error: %d hunk(s) not shown in any group after catch-all sweep: %s"
+            % (len(still_missing), ", ".join(still_missing[:10])))
+    # Files with zero hunks (binary/rename) must also each appear at least once.
+    shown_now = {f["path"] for g in out_groups for f in g["files"]}
+    unshown_files = [pf["path"] for pf in parsed["files"] if pf["path"] not in shown_now]
+    if unshown_files:
+        die("internal error: %d file(s) not shown in any group: %s"
+            % (len(unshown_files), ", ".join(unshown_files[:10])))
+
+    # Report: hunks shown in more than one group (informational, allowed by design).
     dup = sorted(hid for hid, c in assigned.items() if c > 1)
 
     # Optionally embed full file contents for the expand-context feature.
@@ -240,9 +301,11 @@ def main(argv):
     n_ins = sum(len(f.get("insights", [])) for g in out_groups for f in g["files"])
     msg = "OK groups: %d files: %d hunks: %d insights: %d" % (
         len(out_groups), n_files, n_hunks, n_ins)
-    if dropped:
-        msg += " | WARNING %d hunk(s) not shown in any group: %s" % (
-            len(dropped), ", ".join(dropped[:10]) + (" …" if len(dropped) > 10 else ""))
+    if catch_files:
+        msg += " | swept %d unassigned file(s) into 'Other changes': %s" % (
+            len(catch_files),
+            ", ".join(f["path"] for f in catch_files[:10])
+            + (" …" if len(catch_files) > 10 else ""))
     if dup:
         msg += " | note %d hunk(s) shown in multiple groups: %s" % (
             len(dup), ", ".join(dup[:10]) + (" …" if len(dup) > 10 else ""))

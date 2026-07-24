@@ -174,9 +174,10 @@ Now a Python script (`parse_diff.py`) parses the diff into byte-exact hunks with
 `hunkId`s; Claude (in the main chat) emits **only the analysis** (titles, neutral
 descriptions, "things worth confirming", insights, and which `hunkId`s belong to each
 group); and `merge_analysis.py` joins them, embeds full file contents, and enforces
-invariants (every referenced hunk exists; every hunk is covered exactly once). The model
-never emits a line of code, so it can't alter one — and its output is a small fraction of
-the diff's size.
+invariants (every referenced hunk exists; **every changed file is always shown** — anything
+the analysis didn't place is swept into an "Other changes" group, and the merge fails rather
+than hide a file). The model never emits a line of code, so it can't alter one — nor drop
+one — and its output is a small fraction of the diff's size.
 
 ## How comments are anchored
 

@@ -130,9 +130,11 @@ How to author each field:
   most-important-first; incidental last.
 - **Assign hunks to groups by hunk.** Each group's file entry lists the `hunkIds` it
   includes. If a file's hunks belong to different concerns, list that file in EACH relevant
-  group with only that group's `hunkIds`. **Every `hunkId` from `parsed.json` must be
-  assigned to exactly one group** — none dropped, none duplicated. (The merge step verifies
-  this and warns on drops/dupes.)
+  group with only that group's `hunkIds`. **Every `hunkId` from `parsed.json` should be
+  assigned to exactly one group** — none dropped, none duplicated. Still, aim for full,
+  deliberate coverage: anything you don't place is a file the reviewer sees under a generic
+  "Other changes" heading instead of in a meaningful group. (The merge step **guarantees**
+  nothing is hidden — see below — but a well-grouped review places every file on purpose.)
 - **`reasoning`** (per group, 1–3 sentences): purely descriptive and neutral — what this
   group does and how the pieces relate. No evaluation, no "you should check", no
   "risk/concern/looks good".
@@ -244,20 +246,25 @@ Analysis schema (what you write to the analysis file):
 ```
 
 **Stage C — merge (deterministic, no LLM).** Join the analysis onto the parsed hunks,
-optionally embedding full file contents, producing the final UI groups JSON. This also
-**enforces the invariants**: it errors if any referenced `hunkId` is unknown, and warns if
-any parsed hunk is unassigned or shown in multiple groups.
+optionally embedding full file contents, producing the final UI groups JSON. This
+**enforces coverage as a hard guarantee, not a warning**: it errors if any referenced
+`hunkId` is unknown; it sweeps any hunk the analysis left unassigned — and any file with no
+hunks at all (binary, pure rename, mode change) that no group surfaced — into a synthetic
+**"Other changes"** group in diff order; and it then `die()`s if, after that sweep, any hunk
+or file is *still* not shown. So **every changed file always appears in the UI**, regardless
+of how the analysis grouped them — the model cannot hide a file by omission.
 
 ```bash
 python3 "$SCRIPTS/merge_analysis.py" /tmp/pr-$PR-parsed.json /tmp/pr-$PR-analysis.json \
   /tmp/pr-$PR-groups.json --repo owner/name --sha <headSha>
-# -> OK groups: G files: F hunks: H insights: I [| WARNING …unassigned…] -> /tmp/pr-$PR-groups.json
+# -> OK groups: G files: F hunks: H insights: I [| swept N unassigned file(s) into 'Other changes'] -> …
 ```
 
 Passing `--repo`/`--sha` makes the merge fetch each text file's content at the head SHA
 via `gh api` and set `fullContent` (powering "⋯ expand context"); omit them to skip that.
-Review any `WARNING unassigned hunks` — either it's fine (rare) or revise the analysis to
-place them.
+If the output notes it `swept N unassigned file(s) into 'Other changes'`, those files were
+covered but not thematically grouped — usually worth revising the analysis to place them in
+a meaningful group, though the review is still complete either way.
 
 ### Validate the analysis before merging
 
@@ -281,7 +288,9 @@ if dropped: print("WARNING unassigned hunks:", len(dropped), dropped[:10])
 PY
 ```
 
-Fix any `ERROR unknown hunkIds` before merging; aim for zero `WARNING unassigned hunks`.
+Fix any `ERROR unknown hunkIds` before merging. Aim for zero `WARNING unassigned hunks` too
+— not because they'd be lost (the merge sweeps them into "Other changes"), but because a
+deliberately grouped file reviews better than one dumped in the catch-all.
 
 The analysis is small (titles + prose + ids + line numbers), so authoring it inline is
 reliable regardless of PR size. There is no subagent step.

@@ -83,8 +83,11 @@ output**, and **every stage runs in the main chat — do not spawn a subagent.**
 3. **Merge (deterministic):** `python3 …/scripts/merge_analysis.py /tmp/pr-$1-parsed.json /tmp/pr-$1-analysis.json /tmp/pr-$1-groups.json --repo <owner/name> --sha <headSha>`.
    This joins the analysis onto the real hunks, embeds `fullContent` (for "⋯ expand
    context") via `--repo`/`--sha`, and **enforces invariants**: it errors on unknown
-   `hunkId`s and warns on hunks left unassigned or shown in multiple groups. Review any
-   `WARNING unassigned hunks` — if not intentional, revise the analysis to place them.
+   `hunkId`s, and **guarantees coverage**: any unassigned hunk or hunkless file (binary,
+   rename) not placed by the analysis is swept into a synthetic "Other changes" group, and
+   the merge errors out if anything is still unshown — so every changed file always appears.
+   If the output notes files were swept into "Other changes", consider revising the analysis
+   to group them meaningfully (the review is complete either way).
 
 ## Step 4 — Build and open the review UI
 
