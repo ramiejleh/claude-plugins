@@ -1,8 +1,8 @@
 # Publishing (maintainer only)
 
-These steps are for **you**, the maintainer. They cover getting `local-marketplace` onto
-GitHub so your team can install `interactive-pr-review` from it, and shipping updates
-afterward. Your team does **not** need this file — they only need the "For your team"
+These steps are for **you**, the maintainer. They cover getting this marketplace repo
+(`claude-plugins`, whose working copy lives in the `local-marketplace/` folder) onto GitHub
+so your team can install `interactive-pr-review` from it, and shipping updates afterward. Your team does **not** need this file — they only need the "For your team"
 section of [interactive-pr-review/README.md](interactive-pr-review/README.md).
 
 ## What gets published
@@ -90,17 +90,19 @@ Steps:
 That's it — publishing is just a push. Teammates pick it up with:
 
 ```
-/plugin marketplace update local-marketplace
+/plugin marketplace update claude-plugins
 /plugin install interactive-pr-review
 ```
 
-(`local-marketplace` is the marketplace `name` in `marketplace.json`, not the repo name.)
+(`claude-plugins` is the marketplace `name` in `marketplace.json`; it matches the repo name.)
 
 ## Notes
 
-- **Two names, don't mix them up.** The *repo* name (e.g. `pr-review-marketplace`) is what
-  `marketplace add <owner>/<repo>` takes; the *marketplace* name (`local-marketplace`) is
-  what `marketplace update <name>` takes.
+- **Marketplace name = repo name.** The marketplace `name` in `marketplace.json` is
+  `claude-plugins`, deliberately the same as the repo. So `marketplace add
+  ramiejleh/claude-plugins` (owner/repo) and `marketplace update claude-plugins` (the name)
+  line up — no separate names to track. (The on-disk folder is still `local-marketplace/`;
+  that's just where the working copy lives and doesn't affect any command.)
 - **`CODEOWNERS`** currently lists `@claude-market @ramiejleh`. `@claude-market` is a
   leftover from the plugin scaffold and only matters if you ever submit to that public
   marketplace. For a team-internal repo you can drop it and list your own team, or leave it

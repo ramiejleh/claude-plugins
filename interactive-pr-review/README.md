@@ -83,12 +83,13 @@ through the same GitHub account `gh` is authenticated as.
 To pick up a newer version after the maintainer publishes one:
 
 ```
-/plugin marketplace update local-marketplace              # refresh the marketplace listing
+/plugin marketplace update claude-plugins                 # refresh the marketplace listing
 /plugin install interactive-pr-review                     # reinstall at the new version
 ```
 
-> `local-marketplace` is the marketplace's registered name (from `marketplace.json`), not
-> the repo name — that's what `/plugin marketplace update` takes.
+> `claude-plugins` is the marketplace's registered name (from `marketplace.json`). It
+> matches the repo name, so `/plugin marketplace add ramiejleh/claude-plugins` and
+> `/plugin marketplace update claude-plugins` line up.
 
 ## Usage
 
