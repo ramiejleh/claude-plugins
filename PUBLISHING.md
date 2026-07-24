@@ -90,18 +90,20 @@ Steps:
 That's it — publishing is just a push. Teammates pick it up with:
 
 ```
-/plugin marketplace update claude-plugins
+/plugin marketplace update ramiejleh-plugins
 /plugin install interactive-pr-review
 ```
 
-(`claude-plugins` is the marketplace `name` in `marketplace.json`; it matches the repo name.)
+(`ramiejleh-plugins` is the marketplace `name` in `marketplace.json` — the identifier
+`marketplace update` takes, distinct from the `owner/repo` that `marketplace add` takes.)
 
 ## Notes
 
-- **Marketplace name = repo name.** The marketplace `name` in `marketplace.json` is
-  `claude-plugins`, deliberately the same as the repo. So `marketplace add
-  ramiejleh/claude-plugins` (owner/repo) and `marketplace update claude-plugins` (the name)
-  line up — no separate names to track. (The on-disk folder is still `local-marketplace/`;
+- **Two identifiers, don't mix them up.** You **add** by `owner/repo`
+  (`ramiejleh/claude-plugins`); you **update** by the marketplace `name` from
+  `marketplace.json` (`ramiejleh-plugins`). They deliberately differ: Claude Code rejects any
+  marketplace `name` starting with `claude-` (reserved for official Anthropic marketplaces),
+  so the name can't just mirror the repo. (The on-disk folder is still `local-marketplace/`;
   that's just where the working copy lives and doesn't affect any command.)
 - **`CODEOWNERS`** currently lists `@claude-market @ramiejleh`. `@claude-market` is a
   leftover from the plugin scaffold and only matters if you ever submit to that public

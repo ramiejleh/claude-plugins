@@ -83,13 +83,14 @@ through the same GitHub account `gh` is authenticated as.
 To pick up a newer version after the maintainer publishes one:
 
 ```
-/plugin marketplace update claude-plugins                 # refresh the marketplace listing
+/plugin marketplace update ramiejleh-plugins              # refresh the marketplace listing
 /plugin install interactive-pr-review                     # reinstall at the new version
 ```
 
-> `claude-plugins` is the marketplace's registered name (from `marketplace.json`). It
-> matches the repo name, so `/plugin marketplace add ramiejleh/claude-plugins` and
-> `/plugin marketplace update claude-plugins` line up.
+> Two different identifiers: you **add** by `owner/repo` (`ramiejleh/claude-plugins`), but
+> **update** by the marketplace's registered *name* (`ramiejleh-plugins`, from the `name`
+> field in `marketplace.json`). They differ because Claude Code reserves the `claude-`
+> prefix for official marketplaces, so the name can't match the repo here.
 
 ## Usage
 
