@@ -1,0 +1,29 @@
+{
+  "name": "interactive-pr-review",
+  "version": "1.9.0",
+  "description": "Interactively review GitHub PRs — Claude fetches the PR, groups the diff into logical chunks with reasoning, presents them in a review UI, and posts your line comments back to GitHub.",
+  "author": {
+    "name": "Rami Ejleh",
+    "url": "https://github.com/ramiejleh"
+  },
+  "homepage": "https://github.com/ramiejleh/interactive-pr-review",
+  "repository": "https://github.com/ramiejleh/interactive-pr-review",
+  "license": "MIT",
+  "keywords": [
+    "github",
+    "pull-request",
+    "code-review",
+    "diff",
+    "gh-cli",
+    "review",
+    "syntax-highlighting",
+    "code-insights"
+  ],
+  "commands": [
+    "./commands/review.md"
+  ],
+  "skills": [
+    "./skills/pr-review-ui/SKILL.md"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

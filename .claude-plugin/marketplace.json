@@ -1,0 +1,34 @@
+{
+  "name": "local-marketplace",
+  "owner": {
+    "name": "Rami Ejleh",
+    "url": "https://github.com/ramiejleh"
+  },
+  "metadata": {
+    "description": "Local marketplace for developing and installing plugins from disk.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "interactive-pr-review",
+      "source": "./interactive-pr-review",
+      "description": "Interactively review GitHub PRs (comments only) — Claude fetches the PR, groups the diff into logical chunks with neutral descriptions, a 'things worth confirming' list, and inline insight bubbles explaining the code, presents them in a review UI with a sidebar and IDE-highlighted diffs, and posts your line- and file-level comments back to GitHub in one click.",
+      "version": "1.9.0",
+      "author": {
+        "name": "Rami Ejleh",
+        "url": "https://github.com/ramiejleh"
+      },
+      "license": "MIT",
+      "keywords": [
+        "github",
+        "pull-request",
+        "code-review",
+        "diff",
+        "gh-cli",
+        "review",
+        "syntax-highlighting",
+        "code-insights"
+      ]
+    }
+  ]
+}

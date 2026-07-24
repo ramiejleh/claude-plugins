@@ -1,0 +1,182 @@
+# interactive-pr-review
+
+Interactively review GitHub pull requests with Claude Code. Reference a PR by number and
+Claude will fetch it, reason about the diff, and build a local review UI that walks you
+through the **exact GitHub diff** — grouped into logical chunks, with reasoning for each
+group *and* each file — so long PRs become easy to review and understand. The diff is
+syntax-highlighted like an IDE, each file gets a rich header and an AI description of
+what changed in it, and you can comment at the line, file, or whole-review level. Paste
+the comments back and Claude posts them to the PR at the exact lines you chose.
+
+The diff shown is always byte-for-byte what GitHub returns. Claude only groups, orders,
+highlights, and annotates it — it never rewrites the code under review.
+
+## Highlights
+
+- **Sidebar layout** — the review summary, action selector, export button, and a
+  clickable group navigator live in a sticky sidebar, leaving the full width for the diff.
+- **IDE-style syntax highlighting** — diffs are colored with a vendored copy of
+  highlight.js (GitHub light/dark themes), so the output is fully self-contained and
+  needs no network at view time.
+- **Per-file context** — every file shows a header (status, path, rename arrow, language,
+  +/− counts) and a neutral, one-to-two sentence description of what changed (purely
+  descriptive — it never judges the code).
+- **"Things worth confirming"** — each group lists a few concrete things to focus on, so
+  evaluative guidance is separated from the neutral descriptions.
+- **Per-group file manifest** — each group opens with a list of its files and each file's
+  role in that grouping (linking down to the diff), so you can trace how the files work
+  together before diving in.
+- **Two diff views** — switch between **Unified** (inline) and **Split** (old / new side
+  by side) from the sidebar.
+- **Expandable context** — "⋯ expand" affordances around each hunk reveal the surrounding
+  real file lines on demand (a chunk at a time, or all), so you can trace how a change
+  sits in the file without leaving the diff. Expanded lines are commentable too.
+- **Inline insight subtitles** — read-only 💡 annotations, **one per logical block**
+  (function, interface, const group, class, component, notable conditional, test block…),
+  describing what each block is, what it does, its parameters/inputs, and what it's used
+  for — like explanatory comments woven over the file so you always know what you're
+  reviewing. Each sits above its block, marked with a left rail and labelled with the
+  covered lines. Toggle them off from the sidebar for a bare diff; they're never part of
+  your review.
+- **Three comment levels** — click a line, comment on a whole file, or write an overall
+  review summary. **One click** copies all of them (summary + line + file comments)
+  together as JSON.
+- **Comments only** — this tool exists to leave review comments. It never approves or
+  requests changes.
+- **Deterministic UI** — the HTML structure is fixed; only the injected data differs, so
+  every review page looks and behaves the same.
+- **Files spanning concerns appear in each relevant group**, carrying only that group's
+  hunks (grouping is by hunk, not by file).
+
+## Requirements
+
+- [GitHub CLI (`gh`)](https://cli.github.com) installed and authenticated
+  (`gh auth login`). The plugin checks this on session start and warns you if it's
+  missing.
+- A web browser (the review UI is a local HTML file).
+
+## Installation
+
+### Try it locally (from a checkout)
+
+If you have the folder on disk, install straight from it — handy while developing:
+
+```
+/plugin install ./interactive-pr-review
+```
+
+### For your team (from the marketplace repo)
+
+Once the marketplace has been pushed to GitHub (maintainer steps in
+[PUBLISHING.md](../PUBLISHING.md)), each teammate adds the marketplace once and installs
+the plugin from it:
+
+```
+/plugin marketplace add ramiejleh/claude-plugins
+/plugin install interactive-pr-review
+```
+
+`gh` must be installed and authenticated (`gh auth login`) — the plugin checks this on
+session start. If the marketplace repo is private, teammates also need read access to it
+through the same GitHub account `gh` is authenticated as.
+
+To pick up a newer version after the maintainer publishes one:
+
+```
+/plugin marketplace update local-marketplace              # refresh the marketplace listing
+/plugin install interactive-pr-review                     # reinstall at the new version
+```
+
+> `local-marketplace` is the marketplace's registered name (from `marketplace.json`), not
+> the repo name — that's what `/plugin marketplace update` takes.
+
+## Usage
+
+Run the command with a PR number:
+
+```
+/interactive-pr-review:review 128
+```
+
+If you're not inside the target repository, add an `owner/repo` slug:
+
+```
+/interactive-pr-review:review 128 ramiejleh/some-repo
+```
+
+### What happens
+
+1. **Fetch** — Claude pulls the PR metadata, file list, unified diff, and head commit
+   SHA via `gh`.
+2. **Group** — the diff is split into logical chunks (feature, tests, config,
+   incidental changes…), each with a neutral reasoning line, a "Things worth confirming"
+   list, per-file descriptions, and inline insight bubbles. Claude writes this analysis
+   layer directly to a temp file — no code, only references to the parsed hunks — keeping
+   your main context clean.
+3. **Review** — Claude generates and opens a self-contained HTML UI at
+   `/tmp/pr-<number>-review.html`: a sidebar (summary, one-click export, insights toggle,
+   group nav) beside collapsible groups, each file syntax-highlighted with a rich header,
+   description, and 💡 insight bubbles. Comment at the line, file, or whole-review level.
+4. **Export** — click **Copy all comments as JSON** (one click captures the summary and
+   every line and file comment together) and paste the result back into the chat.
+5. **Post** — Claude validates your comments, shows you a summary, and — after you
+   confirm — posts them to GitHub as a single **comment** review, anchored to the exact
+   lines and the PR's head commit. It never approves or requests changes.
+
+Nothing is ever posted to GitHub without your explicit confirmation.
+
+## Components
+
+| Type | Name | Purpose |
+| --- | --- | --- |
+| Command | `/interactive-pr-review:review <pr#> [owner/repo]` | The entry point that runs the full review workflow. |
+| Skill | `pr-review-ui` | Procedures for the parse → analyze → merge pipeline, building the review UI, and posting comments. The whole workflow runs in the main chat — no subagent. |
+| Scripts | `parse_diff.py`, `merge_analysis.py` | Deterministic diff parsing and analysis-merge. The diff never passes through the model. |
+| Hook | `SessionStart` gh check | Warns (non-blocking) if `gh` is missing or unauthenticated. |
+
+### Architecture: the diff never passes through the model
+
+Earlier versions had the model regenerate the entire diff as JSON — slow, expensive,
+prone to dropping on large PRs, and the one place the "diff is sacred" rule could break.
+Now a Python script (`parse_diff.py`) parses the diff into byte-exact hunks with stable
+`hunkId`s; Claude (in the main chat) emits **only the analysis** (titles, neutral
+descriptions, "things worth confirming", insights, and which `hunkId`s belong to each
+group); and `merge_analysis.py` joins them, embeds full file contents, and enforces
+invariants (every referenced hunk exists; every hunk is covered exactly once). The model
+never emits a line of code, so it can't alter one — and its output is a small fraction of
+the diff's size.
+
+## How comments are anchored
+
+GitHub anchors review comments to a line on a side of the diff:
+
+- Added / context lines → `side: RIGHT` with the **new** file line number.
+- Removed lines → `side: LEFT` with the **old** file line number.
+
+The UI computes these from each hunk header, so comments land on exactly the line you
+clicked. Only lines present in the diff can be commented on.
+
+## Development
+
+The plugin structure:
+
+```
+interactive-pr-review/
+├── .claude-plugin/plugin.json     # manifest
+├── commands/review.md             # /interactive-pr-review:review
+├── skills/pr-review-ui/
+│   ├── SKILL.md                   # parse / analyze / merge / UI / post procedures
+│   ├── scripts/
+│   │   ├── parse_diff.py          # diff → canonical hunks (deterministic)
+│   │   └── merge_analysis.py      # analysis + hunks → final groups JSON
+│   └── assets/review-template.html# the review UI template
+├── hooks/
+│   ├── hooks.json                 # SessionStart hook registration
+│   └── check-gh-auth.sh           # gh install + auth check
+├── CODEOWNERS
+└── README.md
+```
+
+## License
+
+MIT © Rami Ejleh

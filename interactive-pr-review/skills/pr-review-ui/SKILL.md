@@ -1,0 +1,443 @@
+---
+name: pr-review-ui
+description: Procedures for interactive GitHub PR review — fetch PR data with the gh CLI, group a unified diff into logical chunks (with group- and file-level AI reasoning plus inline read-only insight bubbles explaining the code) authored directly in the main chat and written to a temp JSON file, inject that data plus vendored highlight.js into a self-contained HTML review UI with a sidebar and per-file headers, collect line- and file-level comments, and post them back to GitHub as a pull request review. Use when reviewing, walking through, or commenting on a GitHub pull request by number.
+---
+
+# PR Review UI
+
+This skill turns a GitHub pull request into a guided, chunk-by-chunk review experience
+and posts the reviewer's comments back to GitHub. It is the engine behind the
+`/interactive-pr-review:review` command, but can be used directly any time the user
+wants to review a PR carefully.
+
+## Non-negotiables
+
+1. **The diff is sacred.** Everything shown to the reviewer must be exactly what GitHub
+   returns — same paths, same hunk headers, same whitespace, same line content. You may
+   reorder and group hunks, syntax-highlight them for display, and add commentary
+   *around* them, but never edit the code inside a hunk.
+2. **No surprise writes to GitHub.** Fetching is read-only and always fine. Posting
+   comments requires explicit user confirmation of the exact comment set first.
+3. **Anchor to the head commit.** Review comments must reference the PR's latest head
+   SHA, or they will fail to attach or attach to the wrong revision.
+4. **The grouping JSON lives in a temp file, by design.** It is far too large to pass
+   through the conversation. You author the analysis directly (in the main chat — no
+   subagent) and write it to a temp file, then inject it into the HTML with a script.
+   Neither the big JSON nor the big HTML should be pasted into the main context. Clean the
+   temp files up at the end.
+
+## 1. Fetch PR data (read-only)
+
+Prefer the `gh` CLI. When the user gave an `owner/repo`, pass `--repo <slug>` to every
+command; otherwise `gh` uses the current directory's remote.
+
+```bash
+PR=<number>                       # e.g. 128
+REPO_FLAG=""                      # or: REPO_FLAG="--repo owner/name"
+
+# Metadata
+gh pr view "$PR" $REPO_FLAG --json number,title,author,baseRefName,headRefName,body,url,additions,deletions,changedFiles,state,isDraft,mergeable
+
+# Changed files with stats and status (added/modified/removed/renamed)
+gh pr view "$PR" $REPO_FLAG --json files
+
+# The unified diff — save it, do not paste the whole thing around
+gh pr diff "$PR" $REPO_FLAG > /tmp/pr-$PR.diff
+
+# Head commit SHA — required to anchor review comments
+HEAD_SHA=$(gh pr view "$PR" $REPO_FLAG --json commits --jq '.commits[-1].oid')
+
+# Resolve owner/repo for later gh api calls
+gh pr view "$PR" $REPO_FLAG --json url --jq '.url'   # .../{owner}/{repo}/pull/{n}
+```
+
+If `gh` is unavailable, fall back to the REST API with `curl` and a
+`GITHUB_TOKEN`/`GH_TOKEN`, requesting `Accept: application/vnd.github.v3.diff` for the
+diff. Always prefer `gh`.
+
+## 2. Parse → analyze → merge (the pipeline)
+
+The grouping JSON is built by three stages. **The diff never passes through the language
+model as output** — deterministic scripts own it; you (in the main chat) produce only the
+analysis layer, which is small. This makes the "diff is sacred" rule structural (you can't
+alter a line you never emit) and eliminates the huge-response failures that plagued the
+earlier one-shot approach. `${CLAUDE_PLUGIN_ROOT}` points at the plugin root; the scripts
+live under `skills/pr-review-ui/scripts/`.
+
+**Run every stage in the main conversation — do not spawn a subagent.** Stages A and C are
+plain script calls. Stage B is authored by you directly: you read the parsed diff and write
+a small analysis-only JSON.
+
+**Stage A — parse (deterministic, no LLM).** Turn the diff into a canonical structure with
+stable `hunkId`s (`<path>#<index>`):
+
+```bash
+PR=<number>
+SCRIPTS="$CLAUDE_PLUGIN_ROOT/skills/pr-review-ui/scripts"
+# Write PR metadata (from step 1) to /tmp/pr-$PR-meta.json first, e.g. with gh --json.
+python3 "$SCRIPTS/parse_diff.py" /tmp/pr-$PR.diff /tmp/pr-$PR-parsed.json --pr-json /tmp/pr-$PR-meta.json
+# -> OK parsed files: N hunks: M lines: L -> /tmp/pr-$PR-parsed.json
+```
+
+`parsed.json` = `{ pr, files: [ { path, previousPath, status, language, additions,
+deletions, hunks: [ { hunkId, header, oldStart, newStart, lines: [ {type, oldLine,
+newLine, text} ] } ] } ] }`. This is the byte-exact source of truth for the code.
+
+**Stage B — analyze (you, in the main chat — no subagent).** Read `/tmp/pr-<number>-parsed.json`
+(and the raw `.diff` for extra context if useful) and author the **analysis only** — groups,
+titles, neutral `reasoning`, `thingsToConfirm`, per-file `role`/`description`/`insights`, and
+the `hunkIds` each group's file includes. Emit **no code**: reference hunks by their
+`hunkId`, never reproduce their lines. Write the result to `/tmp/pr-<number>-analysis.json`
+with a heredoc using a **quoted delimiter** (`<<'JSON'`), then validate it (see the
+validation snippet below). Because this payload is titles + prose + ids + line numbers, it
+is a small fraction of the diff's size — write it in a single heredoc; there is no need to
+chunk it, and there is no subagent round-trip.
+
+How to author each field:
+
+- **Group logically.** Bundle changes a reviewer should consider together — by
+  feature/concern (across files), pairing implementation with its tests, separating core
+  changes from incidental ones (config, lockfiles, generated, vendored). Order groups
+  most-important-first; incidental last.
+- **Assign hunks to groups by hunk.** Each group's file entry lists the `hunkIds` it
+  includes. If a file's hunks belong to different concerns, list that file in EACH relevant
+  group with only that group's `hunkIds`. **Every `hunkId` from `parsed.json` must be
+  assigned to exactly one group** — none dropped, none duplicated. (The merge step verifies
+  this and warns on drops/dupes.)
+- **`reasoning`** (per group, 1–3 sentences): purely descriptive and neutral — what this
+  group does and how the pieces relate. No evaluation, no "you should check", no
+  "risk/concern/looks good".
+- **`thingsToConfirm`** (per group): 2–5 short, concrete items to focus on. THIS is the only
+  place evaluative "worth checking" guidance belongs (e.g. "That the limiter runs before
+  authentication."). A trivial group may use a short list or `[]`.
+- **`role`** (per file, ≤ ~8 words): the file's responsibility in this group (e.g. "HTTP
+  entry point", "unit tests"). Keep roles distinct across a group's files where possible.
+- **`description`** (per file, 1–2 sentences): neutral, descriptive — what changed in this
+  file for this group's hunks. Describe, don't evaluate.
+- **`insights`** (per file): descriptive subtitles for EVERY logical block — see the detailed
+  rules just below.
+
+**Authoring `insights` — one descriptive subtitle per logical block.** Insights are
+read-only annotations that read like explanatory comments layered over the file, so a
+reviewer always knows what they're looking at. Annotate **every self-contained block** that
+appears in this file's hunks — give each a subtitle. A "block" is any unit with a clear
+start and end / single responsibility:
+- a **function / method / arrow function / hook** (signature + body),
+- an **interface / type alias / enum**,
+- a **class** (and notable methods within it),
+- a **const/let group** or a single significant constant/config object,
+- a **React component** or a JSX section with a distinct purpose,
+- a significant **if / switch / try-catch / loop** with real logic,
+- an **import group** only if worth noting (usually skip trivial imports),
+- a **test `describe`/`it` block** (say what it verifies).
+
+For each block write `text` giving the reviewer context: as applicable, **what it is, what
+it does, its parameters/inputs and return/output, and what it is used for / by**. Voice:
+- "getToken(req): reads the bearer token from the request, returning null when absent; used by the auth middleware to gate protected routes."
+- "RetrievalSource: the shape of a citation surfaced to the UI — id, url, and title."
+- "COPILOT_RETRIEVAL_CONFIG: default tunables (result cap, confidence thresholds, retry/backoff) passed into each retrieval call."
+
+Each insight has:
+- `side` — `RIGHT` for added/context lines (the common case); `LEFT` only when describing
+  removed code.
+- `startLine` / `endLine` — the inclusive line range of the whole block on that side, using
+  the numbers in `parsed.json`. **`startLine` must be exact** (the block's opening
+  signature/declaration line). For `endLine`, cover the block to its closing line; if unsure
+  of the exact close, under-estimate — the merge step **auto-snaps `endLine` forward** to the
+  true closing brace via brace + indentation analysis, so a slightly short `endLine` is fine
+  but a wrong `startLine` is not. Single-line blocks use equal values.
+- `kind` — a short lowercase label: `function` | `method` | `hook` | `interface` | `type` |
+  `enum` | `class` | `const` | `config` | `component` | `jsx` | `logic` | `guard` | `loop` |
+  `import` | `export` | `schema` | `test` | `effect`.
+- `text` — one to three sentences that *describe* the block. Purely descriptive — do NOT
+  judge, praise, or suggest changes.
+
+Coverage: aim for one insight per logical block within the changed regions, in line order,
+non-overlapping where possible (nest only when a smaller block genuinely merits its own
+note). Only reference line numbers present in this file's hunks. Skip pure noise (blank
+lines, a lone closing brace, trivial one-line re-exports). Config/lockfile/generated files
+may have few or no insights. These are toggled on/off in the UI, so density is welcome.
+
+Analysis schema (what you write to the analysis file):
+
+```json
+{
+  "groups": [
+    {
+      "id": "g1",
+      "title": "Rate-limit middleware",
+      "reasoning": "Adds a token-bucket limiter and applies it in the request pipeline.",
+      "thingsToConfirm": [
+        "That the limiter runs before authentication, not after.",
+        "That the token bucket is shared across requests rather than recreated per call."
+      ],
+      "files": [
+        {
+          "path": "src/middleware/rateLimit.ts",
+          "role": "token-bucket implementation",
+          "description": "New module exporting a `rateLimit` middleware factory.",
+          "hunkIds": ["src/middleware/rateLimit.ts#0"],
+          "insights": [
+            { "side": "RIGHT", "startLine": 1, "endLine": 6, "kind": "function",
+              "text": "Factory that returns a middleware closure holding one shared token bucket." }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+**Stage C — merge (deterministic, no LLM).** Join the analysis onto the parsed hunks,
+optionally embedding full file contents, producing the final UI groups JSON. This also
+**enforces the invariants**: it errors if any referenced `hunkId` is unknown, and warns if
+any parsed hunk is unassigned or shown in multiple groups.
+
+```bash
+python3 "$SCRIPTS/merge_analysis.py" /tmp/pr-$PR-parsed.json /tmp/pr-$PR-analysis.json \
+  /tmp/pr-$PR-groups.json --repo owner/name --sha <headSha>
+# -> OK groups: G files: F hunks: H insights: I [| WARNING …unassigned…] -> /tmp/pr-$PR-groups.json
+```
+
+Passing `--repo`/`--sha` makes the merge fetch each text file's content at the head SHA
+via `gh api` and set `fullContent` (powering "⋯ expand context"); omit them to skip that.
+Review any `WARNING unassigned hunks` — either it's fine (rare) or revise the analysis to
+place them.
+
+### Validate the analysis before merging
+
+After writing the analysis file, confirm it parses and every `hunkId` exists (cross-checking
+against `parsed.json`):
+
+```bash
+python3 - /tmp/pr-$PR-analysis.json /tmp/pr-$PR-parsed.json <<'PY'
+import json, sys
+a = json.load(open(sys.argv[1])); parsed = json.load(open(sys.argv[2]))
+valid = {h["hunkId"] for f in parsed["files"] for h in f["hunks"]}
+ref = [hid for g in a["groups"] for f in g["files"] for hid in f.get("hunkIds", [])]
+missing = sorted(set(ref) - valid)
+dropped = sorted(valid - set(ref))
+print("OK groups:", len(a["groups"]),
+      "files:", sum(len(g["files"]) for g in a["groups"]),
+      "hunkRefs:", len(ref),
+      "insights:", sum(len(f.get("insights", [])) for g in a["groups"] for f in g["files"]))
+if missing: print("ERROR unknown hunkIds:", missing[:10])
+if dropped: print("WARNING unassigned hunks:", len(dropped), dropped[:10])
+PY
+```
+
+Fix any `ERROR unknown hunkIds` before merging; aim for zero `WARNING unassigned hunks`.
+
+The analysis is small (titles + prose + ids + line numbers), so authoring it inline is
+reliable regardless of PR size. There is no subagent step.
+
+### Final groups JSON (merge output — what the UI consumes)
+
+`files[]` is nested inside each group; each file carries header fields, `role`,
+`description`, `insights`, optional `fullContent`, and full byte-exact `hunks` (from the
+parser). **A file spanning concerns appears in multiple groups**, each with only that
+group's hunks. Shape:
+
+```json
+{
+  "pr": { "number": 128, "title": "…", "author": "…", "base": "main", "head": "feature/x",
+          "url": "…", "additions": 210, "deletions": 34, "changedFiles": 7, "headSha": "…" },
+  "groups": [ { "id": "g1", "title": "…", "reasoning": "…", "thingsToConfirm": ["…"],
+    "files": [ { "path": "…", "previousPath": null, "status": "added", "language": "typescript",
+      "additions": 40, "deletions": 0, "role": "…", "description": "…",
+      "insights": [ { "side": "RIGHT", "startLine": 1, "endLine": 6, "kind": "function", "text": "…" } ],
+      "fullContent": "…optional…",
+      "hunks": [ { "header": "@@ …", "oldStart": 0, "newStart": 1,
+        "lines": [ { "type": "add", "oldLine": null, "newLine": 1, "text": "…" } ] } ] } ] } ]
+}
+```
+
+`type` is `add` | `del` | `context`. `text` is the line without its `+`/`-`/space marker.
+`status` is `added` | `modified` | `removed` | `renamed` | `binary`. `language` is a
+highlight.js name or null.
+
+`reasoning` (per group) and `description` (per file) are **purely descriptive and
+neutral** — no evaluation. All "focus here" guidance lives in `thingsToConfirm` (per
+group), rendered as a "Things worth confirming" section under the reasoning.
+
+`role` (per file) is a short phrase naming the file's responsibility in the group; the UI
+renders a per-group **file manifest** linking each file to its diff. Falls back to
+`description` if absent.
+
+`insights[]` are **read-only descriptive subtitles — one per logical block** (function,
+interface, const group, class, component, notable conditional, test block…). Each
+describes what the block is, what it does, its parameters/inputs and output, and what it's
+used for — like explanatory comments woven over the file so the reviewer always knows what
+they're looking at. Each has `side` (`RIGHT`/`LEFT`), a line **range**
+`startLine`/`endLine` spanning the whole block, a lowercase `kind` (the block type, e.g.
+`function`/`interface`/`const`/`component`/`test`), and descriptive `text`. The UI marks
+the block with a left rail and renders the 💡 subtitle **above the first line**, labelled
+with the covered lines (e.g. "Lines 12–20"). They can be dense — a sidebar toggle hides
+them for a bare diff. Insights are never part of the exported review. (Older data with a
+single `line` still works.)
+
+`fullContent` (optional per file) is the file's complete text at the head SHA, added by
+the merge step's `--repo/--sha` fetch. When present the UI adds **"⋯ expand context"**
+affordances around each hunk to reveal surrounding real file lines inline.
+
+### Diff / anchoring mechanics
+
+Track `oldLine` from `oldStart` and `newLine` from `newStart` per hunk: context lines
+advance both; `del` advances only `oldLine`; `add` advances only `newLine`. GitHub
+anchors a review comment by side + line:
+- `side: "RIGHT"` + `line: <newLine>` for added/context lines (the common case).
+- `side: "LEFT"` + `line: <oldLine>` for removed lines.
+Only lines present in the diff can be commented on. Multi-line comments also send
+`start_line` + `start_side`.
+
+## 3. The review UI template (fixed structure, self-contained)
+
+The UI is `assets/review-template.html`. Its structure is **fixed** — every generated
+page looks the same and only the injected data differs. It provides:
+
+- A **sticky sidebar** with PR title/stats, the review summary box, a one-click
+  "Copy all comments as JSON" button, an insights show/hide toggle, and a clickable group
+  table-of-contents. (No approve/request-changes action — this is a comments-only tool.)
+- A main column of collapsible **groups**, each with a neutral reasoning line, a
+  "Things worth confirming" list, and a **file manifest** (each file's role in the group,
+  linking down to its diff) so the reviewer can trace how the files fit together.
+- Per **file**: a rich header (status pill, path + rename arrow, language, +/− counts),
+  the AI `description`, a "Comment on this file" button, and an IDE-syntax-highlighted
+  diff (via vendored highlight.js) with GitHub-style add/remove backgrounds and dual
+  line numbers.
+- A **Diff view** selector (sidebar) with two modes: **Unified** (inline, default) and
+  **Split** (old on the left, new on the right).
+- **Expandable context**: when `fullContent` is embedded, "⋯ expand" rows appear in the
+  gaps around each hunk; clicking reveals the surrounding real file lines (a chunk at a
+  time, or all) inline, so the reviewer can trace how a change sits in the file without
+  loading a separate full-file view. Revealed lines are commentable too.
+- **Inline insight subtitles**: read-only 💡 annotations (from each file's `insights[]`),
+  one per logical block, describing what each block is/does/takes/is-used-for — like
+  explanatory comments over the file. Each marks its block with a left rail and renders
+  **above the block's first line**, labelled with the covered lines. A sidebar toggle
+  hides them for a bare diff. They never enter the exported review.
+- **Three comment levels**: click a line to comment on it, click "Comment on this file"
+  for a file-level comment, and the sidebar summary for the overall review. Comments are
+  stored in state and re-rendered, so editing one never loses it.
+
+The template has three placeholder tokens, each appearing exactly once:
+`/* __HLJS_LIB__ */`, `/* __HLJS_THEME__ */`, and `/*__PR_REVIEW_DATA__*/ null`.
+
+> Full file contents (for the "⋯ expand context" feature) are fetched by the **merge
+> step** (Stage C) when you pass `--repo`/`--sha` — no separate fetch pass is needed. A
+> file whose content can't be fetched (deleted, moved, permission) simply has no
+> `fullContent` and shows no expand affordance; the diff itself is unaffected. Larger
+> content means a larger HTML file — warn the user if the total is very large (> ~5 MB).
+
+## 4. Build the UI by injecting data + vendored assets (script, not by hand)
+
+Do **not** hand-edit the huge JSON into the template. Run a small script that reads the
+template, the vendored `highlight.min.js`, the vendored `hljs-github-theme.css`, and the
+groups JSON, replaces the three tokens, and writes `/tmp/pr-<number>-review.html`. The
+`${CLAUDE_PLUGIN_ROOT}` env var points at the plugin root (the skill assets live under
+`skills/pr-review-ui/assets/`).
+
+```bash
+PR=<number>
+ASSETS="$CLAUDE_PLUGIN_ROOT/skills/pr-review-ui/assets"
+
+python3 - "$ASSETS" "/tmp/pr-$PR-groups.json" "/tmp/pr-$PR-review.html" <<'PY'
+import json, sys, pathlib
+assets, data_path, out_path = map(pathlib.Path, sys.argv[1:4])
+tpl   = (assets / "review-template.html").read_text()
+lib   = (assets / "vendor" / "highlight.min.js").read_text()
+theme = (assets / "vendor" / "hljs-github-theme.css").read_text()
+data  = pathlib.Path(data_path).read_text().strip()
+json.loads(data)  # validate before injecting
+
+# Inject lib and theme first (they contain no other tokens), then the data.
+for tok, val in [("/* __HLJS_LIB__ */", lib),
+                 ("/* __HLJS_THEME__ */", theme),
+                 ("/*__PR_REVIEW_DATA__*/ null", data)]:
+    assert tpl.count(tok) == 1, f"expected exactly one {tok!r}, found {tpl.count(tok)}"
+    tpl = tpl.replace(tok, val)
+for leftover in ("__HLJS_LIB__", "__HLJS_THEME__", "__PR_REVIEW_DATA__"):
+    assert leftover not in tpl, f"leftover token {leftover}"
+pathlib.Path(out_path).write_text(tpl)
+print("OK wrote", out_path, tpl.__len__(), "chars")
+PY
+
+open "/tmp/pr-$PR-review.html"      # macOS; use xdg-open (Linux) / start (Windows)
+```
+
+Then tell the user to walk the groups (sidebar TOC to jump around), read each file's
+description and the group's "Things worth confirming", click lines and/or "Comment on
+this file" to leave comments, optionally fill the summary, click **Copy all comments as
+JSON**, and paste the result back into the chat.
+
+## 5. Exported comment JSON (UI → Claude)
+
+This is a **comments-only** review tool — there is no approve / request-changes action.
+One click on **Copy all comments as JSON** produces a single object with the summary,
+every line comment, and every file comment together:
+
+```json
+{
+  "pr": 128,
+  "headSha": "4d5e6f7…",
+  "summary": "Overall thoughts, if any.",
+  "comments": [
+    { "path": "src/middleware/rateLimit.ts", "line": 22, "side": "RIGHT",
+      "body": "Does this refill run per-request?" }
+  ],
+  "fileComments": [
+    { "path": "src/middleware/rateLimit.ts",
+      "body": "Where is the limiter config meant to live?" }
+  ]
+}
+```
+
+There is no `action` field. Every posted review is a plain `COMMENT` review.
+
+## 6. Post comments back to GitHub (always a COMMENT review)
+
+1. **Validate** the pasted JSON: it parses, `pr` matches, every line comment has `path`,
+   `line`, `side`, non-empty `body`; every file comment has `path` + `body`.
+2. **Summarize and confirm.** Print line comments as `path:line — <first line of body>`
+   and file comments as `path (file) — <first line>`, and ask the user to confirm before
+   posting.
+3. **Post one COMMENT review** so everything lands together. Line comments become the
+   review's `comments[]`. **File-level comments** have no diff line to anchor to — fold
+   each into the review `body` under a "File notes" heading (prefixed with the path), or
+   post them separately with `gh pr comment`. Build the payload from a file (never
+   hand-concatenate JSON) and submit via `gh api`:
+
+```bash
+gh api --method POST -H "Accept: application/vnd.github+json" \
+  "/repos/{owner}/{repo}/pulls/$PR/reviews" --input /tmp/pr-$PR-review-payload.json
+```
+
+Payload shape: `{ "commit_id": "<headSha>", "event": "COMMENT", "body": "<summary + file notes>", "comments": [ { "path", "line", "side", "body", (optional) "start_line", "start_side" } ] }`.
+The `event` is always `COMMENT`.
+
+4. **Report** the returned review URL and counts. If GitHub rejects a comment whose line
+   isn't in the diff, name it and offer to repost via `gh pr comment $PR --body "…"`.
+
+## 7. Clean up temp files
+
+After the review is posted (or the user abandons), remove the temp artifacts:
+
+```bash
+rm -f /tmp/pr-$PR.diff /tmp/pr-$PR-meta.json /tmp/pr-$PR-parsed.json \
+      /tmp/pr-$PR-analysis.json /tmp/pr-$PR-groups.json /tmp/pr-$PR-review.html \
+      /tmp/pr-$PR-review-payload.json
+```
+
+Leave them in place only if the user explicitly wants to keep reviewing.
+
+### Notes & gotchas
+
+- This is a comments-only tool: every review is posted with `event: "COMMENT"`. Never
+  use `APPROVE` or `REQUEST_CHANGES`, and there is no action field to read.
+- A review with zero comments and an empty body is rejected — require a summary or at
+  least one comment before posting.
+- A `COMMENT` review works even on your own PR, so there is no author check to make.
+- `line` uses the **new** file's numbers for `RIGHT`, the **old** file's for `LEFT` —
+  matching what the UI computed from hunk headers.
+- highlight.js is vendored under `assets/vendor/` so the generated HTML is fully
+  self-contained (no network at view time). Don't switch to a CDN link.

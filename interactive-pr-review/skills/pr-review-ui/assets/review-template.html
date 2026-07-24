@@ -1,0 +1,1010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Interactive PR Review</title>
+<!--
+  Self-contained interactive PR review UI.
+
+  Claude (via the pr-review-ui skill) produces the final file with a small injection
+  script that replaces three placeholder tokens, each of which appears EXACTLY ONCE
+  below (do not add copies of them here — the injector replaces every occurrence):
+    1.  HLJS_LIB token   (in a <script>) → the contents of vendor/highlight.min.js
+    2.  HLJS_THEME token (in a <style>)  → the contents of vendor/hljs-github-theme.css
+    3.  PR_REVIEW_DATA token             → the grouping JSON object (see skill schema)
+  Everything else is fixed, so every generated page has the SAME structure and only
+  the data differs. Do not hand-edit the markup per-PR.
+
+  Each file in the data may carry an insights[] array: read-only 💡 bubbles that
+  explain the code (function purpose, non-obvious logic, gotchas). They render under
+  their anchored diff line, are toggled from the sidebar, and are NEVER included in the
+  exported review JSON — they are guidance for the reviewer, not review comments.
+-->
+<style>
+  /* __HLJS_THEME__ */
+</style>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel-2: #1c2129; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #2f81f7;
+    --add-bg: #12261e; --add-gutter: #1b3227; --del-bg: #25171c; --del-gutter: #3a1d24;
+    --add-text: #3fb950; --del-text: #f85149; --line-no: #6e7681;
+    --btn: #21262d; --btn-hover: #30363d; --sidebar-w: 320px;
+    --status-added: #3fb950; --status-modified: #d29922; --status-removed: #f85149;
+    --status-renamed: #a371f7;
+    --insight-bg: #1a1726; --insight-border: #8957e5; --insight-text: #d2c5f1;
+    --insight-accent: #a371f7; --insight-scope-tint: rgba(163,113,247,.08);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff; --panel: #f6f8fa; --panel-2: #eef1f4; --border: #d0d7de;
+      --text: #1f2328; --muted: #656d76; --accent: #0969da;
+      --add-bg: #e6ffec; --add-gutter: #ccffd8; --del-bg: #ffebe9; --del-gutter: #ffd7d5;
+      --add-text: #1a7f37; --del-text: #cf222e; --line-no: #8c959f;
+      --btn: #f6f8fa; --btn-hover: #eaeef2;
+      --status-added: #1a7f37; --status-modified: #9a6700; --status-removed: #cf222e;
+      --status-renamed: #8250df;
+      --insight-bg: #faf5ff; --insight-border: #8250df; --insight-text: #4c2889;
+      --insight-accent: #8250df; --insight-scope-tint: rgba(130,80,223,.07);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  .layout { display: flex; align-items: flex-start; min-height: 100vh; }
+
+  /* ---- Sidebar (fixed structure: header, summary, action, export, nav) ---- */
+  aside.sidebar {
+    position: sticky; top: 0; align-self: flex-start; flex: 0 0 var(--sidebar-w);
+    width: var(--sidebar-w); height: 100vh; overflow-y: auto;
+    background: var(--panel); border-right: 1px solid var(--border);
+    padding: 20px 16px; display: flex; flex-direction: column; gap: 16px;
+  }
+  .sidebar h1 { margin: 0; font-size: 15px; line-height: 1.35; }
+  .sidebar h1 a { color: var(--accent); text-decoration: none; }
+  .sidebar .pr-sub { color: var(--muted); font-size: 12px; word-break: break-word; }
+  .sidebar .stats { display: flex; gap: 10px; font-size: 12px; flex-wrap: wrap; }
+  .stat.add { color: var(--add-text); } .stat.del { color: var(--del-text); }
+  .sidebar section { display: flex; flex-direction: column; gap: 8px; }
+  .sidebar .section-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); font-weight: 600;
+  }
+  .sidebar textarea {
+    width: 100%; min-height: 96px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    font-family: inherit; font-size: 13px; resize: vertical;
+  }
+  .sidebar select, .sidebar button {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    font-size: 13px; cursor: pointer;
+  }
+  .sidebar button.primary {
+    background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
+  }
+  .sidebar button.primary:hover { filter: brightness(1.08); }
+  .sidebar .hint { color: var(--muted); font-size: 11px; }
+  nav.toc { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
+  nav.toc a {
+    color: var(--text); text-decoration: none; font-size: 12px; padding: 5px 8px;
+    border-radius: 6px; display: flex; justify-content: space-between; gap: 8px;
+  }
+  nav.toc a:hover { background: var(--btn-hover); }
+  nav.toc a .n { color: var(--muted); }
+  .count-pill {
+    background: var(--accent); color: #fff; border-radius: 10px; padding: 0 7px;
+    font-size: 11px; min-width: 18px; text-align: center; display: inline-block;
+  }
+
+  /* ---- Main column ---- */
+  main { flex: 1 1 auto; min-width: 0; max-width: 1100px; margin: 0 auto; padding: 24px; }
+  .group {
+    border: 1px solid var(--border); border-radius: 10px; margin-bottom: 24px;
+    background: var(--panel); overflow: hidden; scroll-margin-top: 16px;
+  }
+  .group > summary {
+    cursor: pointer; padding: 14px 16px; list-style: none; user-select: none;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .group > summary::-webkit-details-marker { display: none; }
+  .group > summary::before { content: "▸"; color: var(--muted); transition: transform .15s; }
+  .group[open] > summary::before { transform: rotate(90deg); }
+  .group summary .title { font-weight: 600; font-size: 15px; }
+  .group summary .count { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .reasoning {
+    padding: 0 16px 14px 42px; color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+  /* When a confirm block follows the reasoning, the confirm block owns the divider. */
+  .reasoning:has(+ .confirm) { border-bottom: none; padding-bottom: 8px; }
+  .confirm {
+    padding: 10px 16px 14px 42px; border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+  .confirm-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    font-weight: 700; color: var(--status-modified); margin-bottom: 6px;
+  }
+  .confirm ul { margin: 0; padding-left: 18px; }
+  .confirm li { margin: 2px 0; color: var(--muted); }
+
+  /* Manifest: how the files in a group fit together */
+  .manifest { padding: 12px 16px 14px; border-bottom: 1px solid var(--border); }
+  .manifest-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+    font-weight: 700; color: var(--muted); margin-bottom: 8px;
+  }
+  .manifest ul { margin: 0; padding: 0; list-style: none;
+    display: flex; flex-direction: column; gap: 7px; }
+  .manifest li {
+    display: grid; grid-template-columns: minmax(120px, max-content) 1fr;
+    gap: 4px 14px; align-items: baseline;
+  }
+  .manifest li a {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+    font-weight: 600; color: var(--accent); text-decoration: none;
+  }
+  .manifest li a:hover { text-decoration: underline; }
+  .manifest .mpath {
+    grid-column: 1; font-family: ui-monospace, monospace; font-size: 10.5px;
+    color: var(--line-no); word-break: break-all;
+  }
+  .manifest .mrole { grid-column: 2; grid-row: 1 / span 2; color: var(--text); opacity: .9; }
+
+  /* ---- File block ---- */
+  .file { border-top: 1px solid var(--border); scroll-margin-top: 12px; }
+  .file:first-of-type { border-top: none; }
+  .file-header {
+    background: var(--panel-2); padding: 10px 16px; display: flex;
+    flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border);
+  }
+  .file-header .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .file-path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+    font-weight: 600; word-break: break-all;
+  }
+  .file-rename { color: var(--muted); font-weight: 400; }
+  .file-status {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
+    padding: 1px 7px; border-radius: 10px; border: 1px solid currentColor;
+  }
+  .file-status.added { color: var(--status-added); }
+  .file-status.modified { color: var(--status-modified); }
+  .file-status.removed { color: var(--status-removed); }
+  .file-status.renamed { color: var(--status-renamed); }
+  .file-status.binary { color: var(--muted); }
+  .file-meta { color: var(--muted); font-size: 11.5px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .file-meta .lang {
+    font-family: ui-monospace, monospace; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 4px; padding: 0 5px;
+  }
+  .file-desc { font-size: 13px; color: var(--text); opacity: .92; }
+  .file-header .actions { margin-top: 2px; }
+  .file-comment-btn {
+    background: var(--btn); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 3px 10px; font-size: 12px; cursor: pointer;
+  }
+  .file-comment-btn:hover { background: var(--btn-hover); }
+  .file-comment-btn.has { border-color: var(--accent); color: var(--accent); }
+
+  /* file-level comment editor / saved */
+  .file-comment { padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--bg); }
+
+  table.diff {
+    width: 100%; border-collapse: collapse;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  }
+  table.diff td { padding: 0 10px; vertical-align: top; }
+  td.ln {
+    width: 1%; min-width: 42px; text-align: right; color: var(--line-no);
+    user-select: none; border-right: 1px solid var(--border); padding: 0 8px;
+  }
+  /* NOTE: `table.diff td` above sets `padding: 0 10px` at specificity (0,1,2), so any
+     code/comment padding MUST be qualified with `table.diff …` to out-specify it. */
+  table.diff td.code {
+    white-space: pre-wrap; word-break: break-word; position: relative;
+    padding: 1px 10px 1px 36px; cursor: pointer;
+  }
+  table.diff td.code .marker {
+    position: absolute; left: 12px; width: 12px; text-align: center;
+    user-select: none; opacity: .8; font-weight: 700;
+  }
+  tr.hunk td { color: var(--muted); background: var(--panel-2); padding: 3px 10px; }
+  table.diff tr.hunk td.code { cursor: default; padding-left: 10px; }
+  tr.add td.gutter, tr.add td.ln { background: var(--add-gutter); }
+  tr.add td.code { background: var(--add-bg); }
+  tr.add .marker { color: var(--add-text); }
+  tr.del td.gutter, tr.del td.ln { background: var(--del-gutter); }
+  tr.del td.code { background: var(--del-bg); }
+  tr.del .marker { color: var(--del-text); }
+  tr.commentable td.code:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
+  tr.commentable.selected td.code { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* highlight.js sets its own token colors; keep the diff bg from the row. */
+  td.code .hljs { background: transparent; padding: 0; display: inline; }
+
+  /* Lines an insight scopes: a thin left rail on the line-number gutter marks the
+     annotated block. No background tint — with one insight per block nearly every line
+     is scoped, so a fill would wash out the whole file; the rail stays legible. */
+  table.diff tr.insight-scope td.ln:first-child {
+    box-shadow: inset 2px 0 0 var(--insight-accent);
+  }
+
+  /* Split (side-by-side) view: two ln|code column pairs. */
+  table.diff.split td.code { width: 50%; }
+  table.diff.split td.code.empty, table.diff.split td.ln.empty { background: var(--panel-2); opacity: .5; }
+  table.diff.split td.ln.add, table.diff.split td.code.add { background: var(--add-bg); }
+  table.diff.split td.ln.del, table.diff.split td.code.del { background: var(--del-bg); }
+  table.diff.split tr.split-line td.code.add .marker { color: var(--add-text); }
+  table.diff.split tr.split-line td.code.del .marker { color: var(--del-text); }
+
+  /* Expandable context: revealed surrounding lines + the "⋯ expand" affordance. */
+  table.diff tr.ctx-expanded td.code { background: transparent; color: var(--muted); }
+  table.diff tr.ctx-expanded td.code .hljs { opacity: .85; }
+  table.diff tr.expander td { background: var(--panel-2); padding: 3px 10px; }
+  table.diff tr.expander td.ln { color: var(--line-no); text-align: center; }
+  .expand-btn {
+    background: transparent; border: none; color: var(--accent); cursor: pointer;
+    font-size: 12px; padding: 2px 6px; border-radius: 4px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .expand-btn:hover { background: var(--btn-hover); text-decoration: underline; }
+
+  /* comment editor / saved (shared).
+     Qualified with `table.diff` to out-specify `table.diff td { padding:0 10px }`. */
+  table.diff tr.comment-row td,
+  table.diff tr.saved-row td { padding: 14px 16px 16px 36px; background: var(--bg); }
+  .comment-box { display: flex; flex-direction: column; gap: 8px; }
+  .comment-box .loc, .file-comment .loc { color: var(--muted); font-size: 11px; }
+  .comment-box textarea, .file-comment textarea {
+    width: 100%; min-height: 64px; background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    font-family: inherit; font-size: 13px; resize: vertical;
+  }
+  .comment-box .row, .file-comment .row { display: flex; gap: 8px; align-items: center; }
+  .saved-comment {
+    background: var(--panel); border-left: 3px solid var(--accent);
+    padding: 8px 12px; border-radius: 0 6px 6px 0; white-space: pre-wrap; cursor: pointer;
+  }
+  .saved-comment .loc { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+  button.sm {
+    background: var(--btn); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px;
+  }
+  button.sm:hover { background: var(--btn-hover); }
+  button.sm.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.sm.danger { color: var(--del-text); }
+  /* AI insight subtitles — read-only descriptive annotations, one per logical block.
+     Styled calm/light (no full border, no card fill) so a page full of them reads like
+     woven-in explanatory comments rather than a wall of alerts. */
+  /* No left padding on the row/cell: the bubble's own left border sits flush at the
+     gutter edge so it continues the scoped-line rail into one unbroken vertical line. */
+  table.diff tr.insight-row td { padding: 3px 16px 3px 0; background: transparent; }
+  .insight {
+    display: flex; gap: 7px; align-items: baseline;
+    border-left: 2px solid var(--insight-accent); border-radius: 0;
+    padding: 2px 0 2px 10px; color: var(--insight-text); font-size: 12px;
+    line-height: 1.45; max-width: 900px; font-style: italic;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .insight .icon { flex: 0 0 auto; line-height: 1.4; opacity: .8; font-style: normal; }
+  .insight .kind {
+    font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
+    color: var(--insight-accent); margin-right: 5px; font-style: normal;
+    border: 1px solid var(--insight-border); border-radius: 3px; padding: 0 4px;
+  }
+  .insight .irange {
+    font-family: ui-monospace, monospace; font-size: 9.5px; font-weight: 600;
+    color: var(--muted); margin-right: 6px; white-space: nowrap; font-style: normal;
+  }
+  body.hide-insights tr.insight-row { display: none; }
+  body.hide-insights tr.insight-scope td.code { box-shadow: none; background-image: none; }
+  .toggle-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .toggle-row input { width: auto; cursor: pointer; }
+  .toggle-row label { cursor: pointer; color: var(--text); }
+
+  .toast {
+    position: fixed; bottom: 24px; left: calc(50% + var(--sidebar-w) / 2);
+    transform: translateX(-50%); background: var(--accent); color: #fff;
+    padding: 10px 20px; border-radius: 8px; opacity: 0; transition: opacity .2s;
+    pointer-events: none; z-index: 50;
+  }
+  .toast.show { opacity: 1; }
+
+  @media (max-width: 820px) {
+    .layout { flex-direction: column; }
+    aside.sidebar {
+      position: static; width: 100%; height: auto; flex-basis: auto;
+      border-right: none; border-bottom: 1px solid var(--border);
+    }
+    nav.toc { display: none; }
+    .toast { left: 50%; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div>
+      <h1 id="pr-title">PR Review</h1>
+      <div class="pr-sub" id="pr-sub"></div>
+      <div class="stats" id="pr-stats"></div>
+    </div>
+
+    <section>
+      <span class="section-label">Review summary
+        <span class="count-pill" id="comment-count">0</span></span>
+      <textarea id="summary" placeholder="Overall thoughts on this PR (optional if you left inline or file comments)…"></textarea>
+    </section>
+
+    <section>
+      <span class="section-label">Export</span>
+      <button class="primary" id="copy-btn">Copy all comments as JSON</button>
+      <span class="hint">Copies your summary, line comments, and file comments together
+        in one JSON. Paste it back into Claude to post them to GitHub as review
+        comments.</span>
+    </section>
+
+    <section>
+      <span class="section-label">Diff view</span>
+      <select id="view-mode">
+        <option value="unified">Unified (inline)</option>
+        <option value="split">Split (side by side)</option>
+      </select>
+      <span class="hint" id="view-hint"></span>
+    </section>
+
+    <section>
+      <span class="section-label">Insights <span class="count-pill" id="insight-count">0</span></span>
+      <div class="toggle-row">
+        <input type="checkbox" id="toggle-insights" checked />
+        <label for="toggle-insights">💡 Show code explanations</label>
+      </div>
+      <span class="hint">Descriptive subtitles on each block (function, interface, const…)
+        explaining what it is and does. Read-only — not part of your review. Turn off for a
+        bare diff.</span>
+    </section>
+
+    <section>
+      <span class="section-label">Groups</span>
+      <nav class="toc" id="toc"></nav>
+    </section>
+  </aside>
+
+  <main id="groups"></main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* __HLJS_LIB__ */
+</script>
+<script>
+// Claude replaces the token below with the grouping JSON described in the skill.
+const DATA = /*__PR_REVIEW_DATA__*/ null;
+
+const HAS_HLJS = typeof hljs !== "undefined";
+
+// Comment stores.
+//  lineComments keyed by "path::side::line"; fileComments keyed by "path".
+const lineComments = new Map();
+const fileComments = new Map();
+
+// Count of AI insight bubbles rendered (read-only; not part of the review).
+let insightCount = 0;
+
+// Current diff view mode: "unified" | "split" | "full".
+let viewMode = "unified";
+// Registry of per-file body re-render fns, so a view-mode switch redraws every file.
+const fileBodies = [];
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function lineKey(path, side, line) { return path + "::" + side + "::" + line; }
+
+// Map a file language hint / extension to a highlight.js language name.
+function hlLang(file) {
+  if (file.language) {
+    const l = String(file.language).toLowerCase();
+    const alias = { ts: "typescript", tsx: "typescript", js: "javascript",
+      jsx: "javascript", yml: "yaml", sh: "bash", shell: "bash", md: "markdown",
+      py: "python", "c++": "cpp", "c#": "csharp" };
+    return alias[l] || l;
+  }
+  const m = /\.([a-z0-9]+)$/i.exec(file.path || "");
+  const ext = m ? m[1].toLowerCase() : "";
+  const byExt = { ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    mjs: "javascript", cjs: "javascript", json: "json", yml: "yaml", yaml: "yaml",
+    sh: "bash", bash: "bash", md: "markdown", py: "python", rb: "ruby", go: "go",
+    rs: "rust", java: "java", kt: "kotlin", css: "css", scss: "scss", html: "xml",
+    xml: "xml", sql: "sql", php: "php", swift: "swift", c: "c", h: "c", cpp: "cpp",
+    cs: "csharp" };
+  return byExt[ext] || null;
+}
+
+function highlight(text, lang) {
+  if (!HAS_HLJS || !lang || !hljs.getLanguage(lang)) return esc(text);
+  try { return hljs.highlight(text, { language: lang, ignoreIllegals: true }).value; }
+  catch (e) { return esc(text); }
+}
+
+function statusClass(s) {
+  s = (s || "modified").toLowerCase();
+  return ["added", "modified", "removed", "renamed", "binary"].includes(s) ? s : "modified";
+}
+
+function render() {
+  const root = document.getElementById("groups");
+  if (!DATA) {
+    root.innerHTML = "<p style='color:var(--muted)'>No PR data was injected into this template.</p>";
+    return;
+  }
+  const pr = DATA.pr || {};
+  document.getElementById("pr-title").innerHTML =
+    (pr.url ? "<a href='" + esc(pr.url) + "' target='_blank'>#" + esc(pr.number) + "</a> " : "#" + esc(pr.number) + " ") +
+    esc(pr.title);
+  document.getElementById("pr-sub").innerHTML =
+    "by <strong>" + esc(pr.author) + "</strong><br>" +
+    esc(pr.base) + " ← " + esc(pr.head);
+  document.getElementById("pr-stats").innerHTML =
+    "<span class='stat add'>+" + esc(pr.additions) + "</span>" +
+    "<span class='stat del'>−" + esc(pr.deletions) + "</span>" +
+    "<span>" + esc(pr.changedFiles) + " file(s)</span>";
+
+  const toc = document.getElementById("toc");
+  toc.innerHTML = "";
+  root.innerHTML = "";
+  fileBodies.length = 0;
+  // Count insights once, from the data (bubbles are re-rendered many times).
+  insightCount = (DATA.groups || []).reduce((sum, g) =>
+    sum + (g.files || []).reduce((s, f) => s + (f.insights || []).length, 0), 0);
+
+  (DATA.groups || []).forEach((g, gi) => {
+    const gid = g.id || ("g" + (gi + 1));
+    const files = g.files || [];
+    const fileCount = files.length;
+
+    // TOC entry
+    const a = document.createElement("a");
+    a.href = "#" + gid;
+    a.innerHTML = "<span>" + esc(g.title) + "</span><span class='n'>" + fileCount + "</span>";
+    toc.appendChild(a);
+
+    const details = document.createElement("details");
+    details.className = "group";
+    details.id = gid;
+    if (gi === 0) details.open = true;
+    const confirm = Array.isArray(g.thingsToConfirm) && g.thingsToConfirm.length
+      ? "<div class='confirm'><div class='confirm-title'>✓ Things worth confirming</div><ul>" +
+        g.thingsToConfirm.map(t => "<li>" + esc(t) + "</li>").join("") + "</ul></div>"
+      : "";
+
+    // Per-file DOM ids so the manifest can link to each file within this group.
+    const fileId = (fi) => gid + "-f" + fi;
+
+    // Manifest: how the files in this group fit together. Uses each file's `role`
+    // (short phrase) if present, else its neutral description.
+    const manifest = fileCount
+      ? "<div class='manifest'><div class='manifest-title'>📄 Files in this group</div><ul>" +
+        files.map((f, fi) => {
+          const role = f.role || f.description || "";
+          const name = (f.path || "").split("/").pop();
+          return "<li><a href='#" + fileId(fi) + "'>" + esc(name) + "</a>" +
+            "<span class='mpath'>" + esc(f.path) + "</span>" +
+            (role ? "<span class='mrole'>" + esc(role) + "</span>" : "") + "</li>";
+        }).join("") + "</ul></div>"
+      : "";
+
+    details.innerHTML =
+      "<summary><span class='title'>" + esc(g.title) + "</span>" +
+      "<span class='count'>" + fileCount + " file(s)</span></summary>" +
+      (g.reasoning ? "<div class='reasoning'>" + esc(g.reasoning) + "</div>" : "") +
+      confirm + manifest;
+
+    files.forEach((f, fi) => details.appendChild(renderFile(f, fileId(fi))));
+    root.appendChild(details);
+  });
+  updateCount();
+  document.getElementById("insight-count").textContent = insightCount;
+
+  // Insights toggle: default on; disabled when there are none.
+  const toggle = document.getElementById("toggle-insights");
+  if (insightCount === 0) {
+    toggle.checked = false; toggle.disabled = true;
+    document.body.classList.add("hide-insights");
+  }
+}
+
+// Whether any file carries embedded full content (enables expandable context).
+function anyFullContent() {
+  return (DATA.groups || []).some(g => (g.files || [])
+    .some(f => typeof f.fullContent === "string"));
+}
+
+const VIEW_HINTS = {
+  unified: "Changes inline, one column.",
+  split: "Old on the left, new on the right."
+};
+
+// Wire the sidebar controls once (render() draws file bodies; these switch/redraw them).
+function wireControls() {
+  const toggle = document.getElementById("toggle-insights");
+  toggle.addEventListener("change", () =>
+    document.body.classList.toggle("hide-insights", !toggle.checked));
+
+  const view = document.getElementById("view-mode");
+  const hint = document.getElementById("view-hint");
+  const expandable = anyFullContent();
+  hint.textContent = VIEW_HINTS[viewMode] + (expandable ? " Use ⋯ to expand surrounding lines." : "");
+  view.value = viewMode;
+  view.addEventListener("change", () => {
+    viewMode = view.value;
+    hint.textContent = VIEW_HINTS[viewMode] + (expandable ? " Use ⋯ to expand surrounding lines." : "");
+    document.body.classList.toggle("view-split", viewMode === "split");
+    redrawCurrentFile();
+  });
+}
+
+function renderFile(f, domId) {
+  const wrap = document.createElement("div");
+  wrap.className = "file";
+  if (domId) wrap.id = domId;
+  const sc = statusClass(f.status);
+  const lang = hlLang(f);
+
+  // Header: status, path (+ rename), meta (lang, +/-), AI description, file-comment button.
+  const header = document.createElement("div");
+  header.className = "file-header";
+  const rename = f.previousPath && f.previousPath !== f.path
+    ? "<span class='file-rename'>" + esc(f.previousPath) + " → </span>" : "";
+  const meta = [];
+  if (lang) meta.push("<span class='lang'>" + esc(lang) + "</span>");
+  if (f.additions != null) meta.push("<span class='stat add'>+" + esc(f.additions) + "</span>");
+  if (f.deletions != null) meta.push("<span class='stat del'>−" + esc(f.deletions) + "</span>");
+  header.innerHTML =
+    "<div class='top'>" +
+      "<span class='file-status " + sc + "'>" + esc(f.status || "modified") + "</span>" +
+      "<span class='file-path'>" + rename + esc(f.path) + "</span>" +
+    "</div>" +
+    (meta.length ? "<div class='file-meta'>" + meta.join("") + "</div>" : "") +
+    (f.description ? "<div class='file-desc'>" + esc(f.description) + "</div>" : "") +
+    "<div class='actions'><button class='file-comment-btn' data-path='" + esc(f.path) +
+      "'>💬 Comment on this file</button></div>";
+  wrap.appendChild(header);
+
+  const fileCommentSlot = document.createElement("div");
+  wrap.appendChild(fileCommentSlot);
+  header.querySelector(".file-comment-btn")
+    .addEventListener("click", () => openFileComment(f.path, fileCommentSlot, header));
+
+  // The diff/file body lives in its own container that we can fully re-render
+  // (on comment change or view-mode switch) without touching the header.
+  const body = document.createElement("div");
+  body.className = "file-body";
+  wrap.appendChild(body);
+  const draw = () => drawFileBody(f, body, lang);
+  fileBodies.push(draw);
+  draw();
+  return wrap;
+}
+
+// Normalize a file's insights. Bubbles render ABOVE the first line of their range,
+// so we key them by `start`. `spanned` marks every line inside a range.
+function fileInsights(f) {
+  const byStart = new Map(); // "side::startLine" -> [insight,…] (bubble emitted before startLine)
+  const spanned = new Map(); // "side::line" -> true if line is inside some insight range
+  (f.insights || []).forEach(ins => {
+    const side = ins.side === "LEFT" ? "LEFT" : "RIGHT";
+    const end = ins.endLine != null ? ins.endLine : ins.line;
+    const start = ins.startLine != null ? ins.startLine : (ins.line != null ? ins.line : end);
+    const lo = Math.min(start, end), hi = Math.max(start, end);
+    const norm = { side, start: lo, end: hi, kind: ins.kind, text: ins.text };
+    const k = side + "::" + lo;
+    if (!byStart.has(k)) byStart.set(k, []);
+    byStart.get(k).push(norm);
+    for (let n = lo; n <= hi; n++) spanned.set(side + "::" + n, true);
+  });
+  return { byStart, spanned };
+}
+
+// Render one file's body in the current viewMode. Reconstructs everything from
+// state (DATA + comment Maps + per-file expansion state), so it's safe to call repeatedly.
+function drawFileBody(f, body, lang) {
+  body.innerHTML = "";
+  const split = viewMode === "split";
+  const table = document.createElement("table");
+  table.className = "diff" + (split ? " split" : "");
+  const ins = fileInsights(f);
+  const cols = split ? 4 : 3;
+
+  // Full file text (if embedded) enables expanding surrounding context between hunks.
+  const fullLines = typeof f.fullContent === "string" ? f.fullContent.split("\n") : null;
+  const hunks = f.hunks || [];
+
+  // Compute, per hunk, its first/last NEW-file line numbers (for context math).
+  const firstNew = h => { for (const l of h.lines) if (l.newLine != null) return l.newLine; return null; };
+  const lastNew  = h => { let v = null; for (const l of h.lines) if (l.newLine != null) v = l.newLine; return v; };
+
+  hunks.forEach((h, hi) => {
+    // Context gap before this hunk (from end of previous hunk to this hunk's start).
+    if (fullLines) {
+      const prevEnd = hi === 0 ? 0 : (lastNew(hunks[hi - 1]) || 0);
+      const thisStart = firstNew(h);
+      if (thisStart != null && thisStart - prevEnd > 1) {
+        table.appendChild(renderGap(f, table, lang, cols, prevEnd + 1, thisStart - 1,
+          hi === 0 ? "up" : "between", ins, fullLines));
+      }
+    }
+    // Hunk header row
+    const hr = document.createElement("tr");
+    hr.className = "hunk";
+    hr.innerHTML = split
+      ? "<td class='ln'></td><td class='code'>" + esc(h.header || "") + "</td>" +
+        "<td class='ln'></td><td class='code'>" + esc(h.header || "") + "</td>"
+      : "<td class='ln'></td><td class='ln'></td><td class='code'>" + esc(h.header || "") + "</td>";
+    table.appendChild(hr);
+    if (split) drawHunkSplit(h, table, f, lang, ins);
+    else drawHunkUnified(h, table, f, lang, ins);
+  });
+
+  // Context gap after the last hunk (down to end of file).
+  if (fullLines && hunks.length) {
+    const lastEnd = lastNew(hunks[hunks.length - 1]) || 0;
+    if (lastEnd < fullLines.length) {
+      table.appendChild(renderGap(f, table, lang, cols, lastEnd + 1, fullLines.length,
+        "down", ins, fullLines));
+    }
+  }
+  body.appendChild(table);
+}
+
+// Render a context gap [from,to] (NEW-file line numbers). Parts the user has expanded
+// (tracked in f._expanded) show as real context lines; the rest show as expander buttons.
+// Returns a DocumentFragment. Expansion state survives redraws.
+function renderGap(f, table, lang, cols, from, to, dir, ins, fullLines) {
+  const frag = document.createDocumentFragment();
+  // Merge the expanded sub-ranges that fall inside this gap.
+  const clipped = (f._expanded || [])
+    .map(([a, b]) => [Math.max(a, from), Math.min(b, to)])
+    .filter(([a, b]) => a <= b)
+    .sort((x, y) => x[0] - y[0]);
+  const merged = [];
+  clipped.forEach(r => {
+    const last = merged[merged.length - 1];
+    if (last && r[0] <= last[1] + 1) last[1] = Math.max(last[1], r[1]);
+    else merged.push(r.slice());
+  });
+  let cursor = from;
+  merged.forEach(([a, b]) => {
+    if (a > cursor) frag.appendChild(expanderRow(f, cols, cursor, a - 1, "between"));
+    for (let n = a; n <= b; n++) appendContextLine(frag, f, table, lang, cols, n, fullLines[n - 1], ins);
+    cursor = b + 1;
+  });
+  if (cursor <= to) frag.appendChild(expanderRow(f, cols, cursor, to, dir));
+  return frag;
+}
+
+// A clickable "expand context" row for the hidden sub-gap [from,to].
+function expanderRow(f, cols, from, to, dir) {
+  const count = to - from + 1;
+  const row = document.createElement("tr");
+  row.className = "expander";
+  const label = dir === "up" ? "↑ Expand " + Math.min(20, count) + " above"
+    : dir === "down" ? "↓ Expand " + Math.min(20, count) + " below"
+    : "↕ Expand " + Math.min(20, count) + " hidden";
+  row.innerHTML = "<td class='ln'>⋯</td>" +
+    "<td class='code' colspan='" + (cols - 1) + "'>" +
+      "<button class='expand-btn'>" + label + "</button>" +
+      (count > 20 ? " <button class='expand-btn all'>show all " + count + "</button>" : "") +
+    "</td>";
+  f._expanded = f._expanded || [];
+  const doExpand = (n) => {
+    let a = from, b = to;
+    if (dir === "up") a = Math.max(from, to - n + 1);   // reveal lines nearest the hunk below
+    else b = Math.min(to, from + n - 1);                // reveal lines nearest the hunk above
+    f._expanded.push([a, b]);
+    redrawCurrentFile();
+  };
+  row.querySelector(".expand-btn").addEventListener("click", () => doExpand(20));
+  const allBtn = row.querySelector(".expand-btn.all");
+  if (allBtn) allBtn.addEventListener("click", () => doExpand(count));
+  return row;
+}
+
+// Append a revealed full-file context line (RIGHT/new-line n) to `frag`, with any
+// insight bubble that STARTS on it placed above, and any saved comment below.
+function appendContextLine(frag, f, table, lang, cols, n, text, ins) {
+  ins.byStart.get("RIGHT::" + n)?.forEach(one => frag.appendChild(insightRow(one, cols)));
+  const spanned = ins.spanned.has("RIGHT::" + n);
+  const tr = document.createElement("tr");
+  tr.className = "context commentable ctx-expanded" + (spanned ? " insight-scope" : "");
+  const cell = "<span class='marker'> </span>" + highlight(text || "", lang);
+  if (cols === 4) {
+    tr.innerHTML =
+      "<td class='ln'>" + n + "</td><td class='code'>" + cell + "</td>" +
+      "<td class='ln'>" + n + "</td><td class='code'>" + cell + "</td>";
+    tr.children[3].classList.add("commentable");
+    tr.children[3].addEventListener("click", () => toggleLineEditor(table, tr, f.path, "RIGHT", n, cols));
+  } else {
+    tr.innerHTML =
+      "<td class='ln'></td><td class='ln'>" + n + "</td><td class='code'>" + cell + "</td>";
+    tr.querySelector("td.code").addEventListener("click", () => toggleLineEditor(table, tr, f.path, "RIGHT", n, cols));
+  }
+  frag.appendChild(tr);
+  const key = lineKey(f.path, "RIGHT", n);
+  if (lineComments.has(key)) frag.appendChild(savedLineRow(table, f.path, "RIGHT", n, cols));
+}
+
+// Build one unified diff line <tr> plus its insight bubbles (above) / comment slot (below).
+function drawHunkUnified(h, table, f, lang, ins) {
+  (h.lines || []).forEach(ln => {
+    const type = ln.type === "add" ? "add" : ln.type === "del" ? "del" : "context";
+    const side = type === "del" ? "LEFT" : "RIGHT";
+    const num = type === "del" ? ln.oldLine : ln.newLine;
+    const spanned = num != null && ins.spanned.has(side + "::" + num);
+    // Insight bubbles that START on this line render ABOVE it.
+    if (num != null) ins.byStart.get(side + "::" + num)?.forEach(one => table.appendChild(insightRow(one, 3)));
+    const tr = document.createElement("tr");
+    tr.className = type + " commentable" + (spanned ? " insight-scope" : "");
+    const marker = type === "add" ? "+" : type === "del" ? "-" : " ";
+    tr.innerHTML =
+      "<td class='ln'>" + (ln.oldLine == null ? "" : ln.oldLine) + "</td>" +
+      "<td class='ln'>" + (ln.newLine == null ? "" : ln.newLine) + "</td>" +
+      "<td class='code'><span class='marker'>" + marker + "</span>" +
+        highlight(ln.text, lang) + "</td>";
+    if (num != null) {
+      const path = f.path;
+      tr.querySelector("td.code").addEventListener("click",
+        () => toggleLineEditor(table, tr, path, side, num, 3));
+    }
+    table.appendChild(tr);
+    if (num != null) {
+      const key = lineKey(f.path, side, num);
+      if (lineComments.has(key)) table.appendChild(savedLineRow(table, f.path, side, num, 3));
+    }
+  });
+}
+
+// Split view: pair del/add lines into left|right columns; comments/insights span full width.
+function drawHunkSplit(h, table, f, lang, ins) {
+  const rows = pairSplitLines(h.lines || []);
+  rows.forEach(pair => {
+    const L = pair.left, R = pair.right;
+    // Insight bubbles that START on either side render ABOVE this row.
+    [["LEFT", L && L.oldLine], ["RIGHT", R && R.newLine]].forEach(([sd, n]) => {
+      if (n != null) ins.byStart.get(sd + "::" + n)?.forEach(one => table.appendChild(insightRow(one, 4)));
+    });
+    const tr = document.createElement("tr");
+    const lClass = L ? (L.type === "del" ? "del" : "context") : "empty";
+    const rClass = R ? (R.type === "add" ? "add" : "context") : "empty";
+    tr.className = "split-line";
+    tr.innerHTML =
+      "<td class='ln " + lClass + "'>" + (L && L.oldLine != null ? L.oldLine : "") + "</td>" +
+      "<td class='code " + lClass + "'>" + (L ? "<span class='marker'>" +
+        (L.type === "del" ? "-" : " ") + "</span>" + highlight(L.text, lang) : "") + "</td>" +
+      "<td class='ln " + rClass + "'>" + (R && R.newLine != null ? R.newLine : "") + "</td>" +
+      "<td class='code " + rClass + "'>" + (R ? "<span class='marker'>" +
+        (R.type === "add" ? "+" : " ") + "</span>" + highlight(R.text, lang) : "") + "</td>";
+    if (L && L.oldLine != null) {
+      tr.children[1].classList.add("commentable");
+      tr.children[1].addEventListener("click", () => toggleLineEditor(table, tr, f.path, "LEFT", L.oldLine, 4));
+    }
+    if (R && R.newLine != null) {
+      tr.children[3].classList.add("commentable");
+      tr.children[3].addEventListener("click", () => toggleLineEditor(table, tr, f.path, "RIGHT", R.newLine, 4));
+    }
+    table.appendChild(tr);
+    [["LEFT", L && L.oldLine], ["RIGHT", R && R.newLine]].forEach(([sd, n]) => {
+      if (n == null) return;
+      const key = lineKey(f.path, sd, n);
+      if (lineComments.has(key)) table.appendChild(savedLineRow(table, f.path, sd, n, 4));
+    });
+  });
+}
+
+// Pair a hunk's lines for split view: dels on the left, adds on the right, context on both.
+function pairSplitLines(lines) {
+  const rows = [];
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    if (ln.type === "context") { rows.push({ left: ln, right: ln }); i++; continue; }
+    // gather a run of dels then a run of adds, and zip them
+    const dels = [], adds = [];
+    while (i < lines.length && lines[i].type === "del") dels.push(lines[i++]);
+    while (i < lines.length && lines[i].type === "add") adds.push(lines[i++]);
+    const n = Math.max(dels.length, adds.length);
+    for (let j = 0; j < n; j++) rows.push({ left: dels[j] || null, right: adds[j] || null });
+    if (!dels.length && !adds.length) i++; // safety
+  }
+  return rows;
+}
+
+// A read-only 💡 bubble explaining code, rendered ABOVE the first line of its range.
+// `cols` is the colspan for the current view.
+function insightRow(ins, cols) {
+  const row = document.createElement("tr");
+  row.className = "insight-row";
+  const kind = ins.kind ? "<span class='kind'>" + esc(ins.kind) + "</span>" : "";
+  const sideLabel = ins.side === "LEFT" ? " (old)" : "";
+  const range = ins.start !== ins.end
+    ? "Lines " + ins.start + "–" + ins.end + sideLabel
+    : "Line " + ins.end + sideLabel;
+  row.innerHTML =
+    "<td colspan='" + cols + "'><div class='insight'>" +
+      "<span class='icon'>💡</span>" +
+      "<span><span class='irange'>" + range + "</span>" + kind + esc(ins.text) + "</span>" +
+    "</div></td>";
+  return row;
+}
+
+/* ---------- line comments (slot-based, no sibling hunting) ---------- */
+
+// Open or close the inline editor for a line, inserted right after `anchorTr`.
+function toggleLineEditor(table, anchorTr, path, side, line, cols) {
+  const existingEditor = table.querySelector("tr.comment-row.editing");
+  // If an editor for THIS line is already open, treat the click as a cancel/toggle.
+  if (existingEditor && existingEditor._key === lineKey(path, side, line)) {
+    existingEditor.remove(); anchorTr.classList.remove("selected");
+    // re-show saved row if a comment exists
+    if (lineComments.has(lineKey(path, side, line))) redrawCurrentFile();
+    return;
+  }
+  if (existingEditor) { existingEditor.remove();
+    table.querySelectorAll("tr.selected").forEach(t => t.classList.remove("selected")); }
+
+  const key = lineKey(path, side, line);
+  // Remove any saved-row for this key while editing (we re-add on save/cancel via redraw).
+  table.querySelectorAll("tr.saved-row").forEach(r => { if (r._key === key) r.remove(); });
+
+  const existing = lineComments.get(key);
+  const row = document.createElement("tr");
+  row.className = "comment-row editing";
+  row._key = key;
+  row.innerHTML =
+    "<td colspan='" + cols + "'><div class='comment-box'>" +
+    "<div class='loc'>" + esc(path) + " · " + side + " line " + line + "</div>" +
+    "<textarea placeholder='Leave a comment on this line…'>" +
+      esc(existing ? existing.body : "") + "</textarea>" +
+    "<div class='row'>" +
+      "<button class='sm primary save'>Save comment</button>" +
+      "<button class='sm cancel'>Cancel</button>" +
+      (existing ? "<button class='sm danger delete'>Delete</button>" : "") +
+    "</div></div></td>";
+  anchorTr.after(row);
+  anchorTr.classList.add("selected");
+  const ta = row.querySelector("textarea"); ta.focus();
+
+  row.querySelector(".save").addEventListener("click", () => {
+    const bodyText = ta.value.trim();
+    if (!bodyText) { flash("Comment is empty"); return; }
+    lineComments.set(key, { path, side, line: Number(line), body: bodyText });
+    redrawCurrentFile();
+  });
+  row.querySelector(".cancel").addEventListener("click", () => { redrawCurrentFile(); });
+  const del = row.querySelector(".delete");
+  if (del) del.addEventListener("click", () => { lineComments.delete(key); redrawCurrentFile(); });
+}
+
+// A persistent saved-comment row (reconstructed from state on every redraw).
+function savedLineRow(table, path, side, line, cols) {
+  const c = lineComments.get(lineKey(path, side, line));
+  const row = document.createElement("tr");
+  row.className = "saved-row";
+  row._key = lineKey(path, side, line);
+  row.innerHTML =
+    "<td colspan='" + cols + "'><div class='saved-comment'>" +
+    "<div class='loc'>" + esc(path) + " · " + side + " line " + line +
+      " — click to edit</div>" + esc(c.body) + "</div></td>";
+  row.querySelector(".saved-comment").addEventListener("click", () => {
+    // Re-open editor anchored to the line row just above this saved row.
+    const anchor = row.previousElementSibling;
+    if (anchor) toggleLineEditor(table, anchor, path, side, line, cols);
+  });
+  return row;
+}
+
+// Redraw every file body from current state (used after any comment change or view switch).
+function redrawCurrentFile() {
+  fileBodies.forEach(fn => fn());
+  updateCount();
+}
+
+/* ---------- file-level comments ---------- */
+function openFileComment(path, slot, header) {
+  const existing = fileComments.get(path);
+  slot.innerHTML =
+    "<div class='file-comment'><div class='comment-box'>" +
+    "<div class='loc'>File comment · " + esc(path) + "</div>" +
+    "<textarea placeholder='Leave a comment about this whole file…'>" +
+      esc(existing ? existing.body : "") + "</textarea>" +
+    "<div class='row'>" +
+      "<button class='sm primary save'>Save</button>" +
+      "<button class='sm cancel'>Cancel</button>" +
+      (existing ? "<button class='sm danger delete'>Delete</button>" : "") +
+    "</div></div></div>";
+  const ta = slot.querySelector("textarea"); ta.focus();
+
+  slot.querySelector(".save").addEventListener("click", () => {
+    const body = ta.value.trim();
+    if (!body) { flash("Comment is empty"); return; }
+    fileComments.set(path, { path, body });
+    renderSavedFile(path, slot, header); updateCount();
+  });
+  slot.querySelector(".cancel").addEventListener("click", () => {
+    if (fileComments.has(path)) renderSavedFile(path, slot, header);
+    else slot.innerHTML = "";
+    setFileBtn(header, fileComments.has(path));
+  });
+  const del = slot.querySelector(".delete");
+  if (del) del.addEventListener("click", () => {
+    fileComments.delete(path); slot.innerHTML = ""; setFileBtn(header, false); updateCount();
+  });
+}
+
+function renderSavedFile(path, slot, header) {
+  const c = fileComments.get(path);
+  slot.innerHTML =
+    "<div class='file-comment'><div class='saved-comment'>" +
+    "<div class='loc'>File comment · " + esc(path) + " — click to edit</div>" +
+    esc(c.body) + "</div></div>";
+  slot.querySelector(".saved-comment").addEventListener("click",
+    () => openFileComment(path, slot, header));
+  setFileBtn(header, true);
+}
+
+function setFileBtn(header, has) {
+  const btn = header.querySelector(".file-comment-btn");
+  if (!btn) return;
+  btn.classList.toggle("has", has);
+  btn.textContent = has ? "💬 Edit file comment" : "💬 Comment on this file";
+}
+
+function updateCount() {
+  document.getElementById("comment-count").textContent =
+    lineComments.size + fileComments.size;
+}
+
+function flash(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 1600);
+}
+
+document.getElementById("copy-btn").addEventListener("click", () => {
+  const pr = (DATA && DATA.pr) || {};
+  const comments = [];
+  lineComments.forEach(c =>
+    comments.push({ path: c.path, line: c.line, side: c.side, body: c.body }));
+  const fileLevel = [];
+  fileComments.forEach(c => fileLevel.push({ path: c.path, body: c.body }));
+
+  const payload = {
+    pr: pr.number,
+    headSha: pr.headSha,
+    summary: document.getElementById("summary").value.trim(),
+    comments,
+    fileComments: fileLevel
+  };
+  if (!comments.length && !fileLevel.length && !payload.summary) {
+    flash("Add a comment or a summary first"); return;
+  }
+  const json = JSON.stringify(payload, null, 2);
+  navigator.clipboard.writeText(json).then(
+    () => flash("Copied " + (comments.length + fileLevel.length) + " comment(s) — paste into Claude"),
+    () => window.prompt("Copy this JSON and paste it into Claude:", json)
+  );
+});
+
+render();
+wireControls();
+</script>
+</body>
+</html>
