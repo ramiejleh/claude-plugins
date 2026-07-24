@@ -292,6 +292,14 @@
     line-height: 1.45; max-width: 900px; font-style: italic;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   }
+  /* Attention tiers: notable stands out, routine recedes. */
+  .insight.level-notable {
+    color: var(--text); font-style: normal; font-size: 12.5px; font-weight: 500;
+    border-left-width: 3px;
+    background: color-mix(in srgb, var(--insight-accent) 8%, transparent);
+    padding-top: 4px; padding-bottom: 4px;
+  }
+  .insight.level-routine { opacity: .82; }
   .insight .icon { flex: 0 0 auto; line-height: 1.4; opacity: .8; font-style: normal; }
   .insight .kind {
     font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
@@ -605,7 +613,8 @@ function fileInsights(f) {
     const end = ins.endLine != null ? ins.endLine : ins.line;
     const start = ins.startLine != null ? ins.startLine : (ins.line != null ? ins.line : end);
     const lo = Math.min(start, end), hi = Math.max(start, end);
-    const norm = { side, start: lo, end: hi, kind: ins.kind, text: ins.text };
+    const level = ins.level === "notable" ? "notable" : "routine";
+    const norm = { side, start: lo, end: hi, kind: ins.kind, text: ins.text, level };
     const k = side + "::" + lo;
     if (!byStart.has(k)) byStart.set(k, []);
     byStart.get(k).push(norm);
@@ -837,9 +846,11 @@ function insightRow(ins, cols) {
   const range = ins.start !== ins.end
     ? "Lines " + ins.start + "–" + ins.end + sideLabel
     : "Line " + ins.end + sideLabel;
+  const level = ins.level === "notable" ? "notable" : "routine";
+  const icon = level === "notable" ? "🔎" : "💡";
   row.innerHTML =
-    "<td colspan='" + cols + "'><div class='insight'>" +
-      "<span class='icon'>💡</span>" +
+    "<td colspan='" + cols + "'><div class='insight level-" + level + "'>" +
+      "<span class='icon'>" + icon + "</span>" +
       "<span><span class='irange'>" + range + "</span>" + kind + esc(ins.text) + "</span>" +
     "</div></td>";
   return row;

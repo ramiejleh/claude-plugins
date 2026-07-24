@@ -31,13 +31,15 @@ highlights, and annotates it — it never rewrites the code under review.
 - **Expandable context** — "⋯ expand" affordances around each hunk reveal the surrounding
   real file lines on demand (a chunk at a time, or all), so you can trace how a change
   sits in the file without leaving the diff. Expanded lines are commentable too.
-- **Inline insight subtitles** — read-only 💡 annotations, **one per logical block**
-  (function, interface, const group, class, component, notable conditional, test block…),
-  describing what each block is, what it does, its parameters/inputs, and what it's used
-  for — like explanatory comments woven over the file so you always know what you're
-  reviewing. Each sits above its block, marked with a left rail and labelled with the
-  covered lines. Toggle them off from the sidebar for a bare diff; they're never part of
-  your review.
+- **Inline insight annotations** — read-only 💡 notes aimed at the **change**, not a
+  narration of every block: for a modified block, *what moved and its consequence*; *who
+  calls it* (real callers looked up in the repo, so you see the blast radius); *why it
+  exists* (drawn from the PR description); and a plain what-it-does only where the code
+  isn't self-evident. Each sits above its block with a left rail and line label, and carries
+  an attention tier — **notable** insights (🔎) render emphasized so the ones you shouldn't
+  skim past stand out from **routine** context. Toggle them off from the sidebar for a bare
+  diff; they stay descriptive (evaluation lives in "Things worth confirming") and are never
+  part of your review.
 - **Three comment levels** — click a line, comment on a whole file, or write an overall
   review summary. **One click** copies all of them (summary + line + file comments)
   together as JSON.

@@ -24,7 +24,8 @@ Analysis JSON schema (produced by the analyzer):
           "role": "…", "description": "…",
           "hunkIds": ["src/x.ts#0", "src/x.ts#2"],
           "insights": [
-            { "side": "RIGHT", "startLine": 12, "endLine": 14, "kind": "function", "text": "…" }
+            { "side": "RIGHT", "startLine": 12, "endLine": 14, "kind": "function",
+              "level": "notable", "text": "…" }
           ]
         }
       ]

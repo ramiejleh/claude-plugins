@@ -146,25 +146,45 @@ How to author each field:
 - **`insights`** (per file): descriptive subtitles for EVERY logical block — see the detailed
   rules just below.
 
-**Authoring `insights` — one descriptive subtitle per logical block.** Insights are
-read-only annotations that read like explanatory comments layered over the file, so a
-reviewer always knows what they're looking at. Annotate **every self-contained block** that
-appears in this file's hunks — give each a subtitle. A "block" is any unit with a clear
-start and end / single responsibility:
-- a **function / method / arrow function / hook** (signature + body),
-- an **interface / type alias / enum**,
-- a **class** (and notable methods within it),
-- a **const/let group** or a single significant constant/config object,
-- a **React component** or a JSX section with a distinct purpose,
-- a significant **if / switch / try-catch / loop** with real logic,
-- an **import group** only if worth noting (usually skip trivial imports),
-- a **test `describe`/`it` block** (say what it verifies).
+**Authoring `insights` — tell the reviewer what they can't already see.** Insights are
+read-only annotations layered over a block of code. The reviewer can *read the code*; a
+bubble that just restates the signature ("`getToken(req)`: reads the token from the request")
+is wasted ink. A good insight answers the questions a reviewer actually has about a **change**:
+what moved, why, what it touches elsewhere, and what to look at that isn't visible in this
+one block. Aim every insight at one of these, in rough priority order:
 
-For each block write `text` giving the reviewer context: as applicable, **what it is, what
-it does, its parameters/inputs and return/output, and what it is used for / by**. Voice:
-- "getToken(req): reads the bearer token from the request, returning null when absent; used by the auth middleware to gate protected routes."
-- "RetrievalSource: the shape of a citation surfaced to the UI — id, url, and title."
-- "COPILOT_RETRIEVAL_CONFIG: default tunables (result cap, confidence thresholds, retry/backoff) passed into each retrieval call."
+1. **The delta (for a modified block): lead with what CHANGED and its consequence**, not a
+   fresh description of the whole block. The parser marks each line `add`/`del`/`context`, so
+   you know what actually moved. Contrast the before/after and name the effect.
+   - Weak (restates): "`retryWithBackoff(fn, opts)`: runs `fn`, retrying with exponential backoff."
+   - Strong (delta): "Adds a `maxDelay` cap (backoff was previously unbounded); callers on the long-poll path now top out at 30s instead of growing indefinitely."
+   For a genuinely **new** block, a concise what-it-is/does is fine — but still favor *why it
+   was added* over mechanics.
+
+2. **Blast radius: name real callers / consumers by looking them up.** You are authoring in
+   the main chat with repo access — don't guess who uses a thing, `grep` for it and say so
+   concretely. This is the single most reviewer-useful move.
+   - Weak (guessed): "`RetrievalSource`: the shape of a citation surfaced to the UI."
+   - Strong (resolved): "`RetrievalSource` — consumed by `CitationList.tsx` and the `/copilot/retrieve` handler; the new required `score` field is a breaking change for both call sites."
+   Use `grep`/`rg` against the repo for exported names, changed signatures, renamed symbols.
+   When a change is local and has no external callers, say that too ("no callers outside this
+   file") — it's reassuring signal.
+
+3. **The why, from PR context.** The PR title/body and commit messages carry intent the code
+   can't. Thread it in where it explains a block's existence.
+   - "New `dedupeByUri` step — added to fix the duplicate-citation bug described in the PR body."
+
+4. **What it is / does — only when non-obvious.** Plain descriptions are the *fallback*, not
+   the default. Use them for genuinely intricate logic (subtle async ordering, a non-obvious
+   invariant, a tricky reducer), and keep them to the part that isn't self-evident.
+
+**Coverage — quality over density. Annotate where you add information beyond the code.**
+This is the opposite of "one bubble per block regardless." A self-evident DTO, a trivial
+getter, a plain re-export, a routine import group — leave them bare. Spend insights on: every
+**changed** block (delta), anything with **external callers** (blast radius), and any block
+whose behavior is **non-obvious**. Fewer, denser, higher-signal bubbles read far better than
+uniform wallpaper the reviewer learns to ignore. Config/lockfile/generated files usually get
+none. Insights are toggleable in the UI, but that is not a licence to pad.
 
 Each insight has:
 - `side` — `RIGHT` for added/context lines (the common case); `LEFT` only when describing
@@ -178,14 +198,18 @@ Each insight has:
 - `kind` — a short lowercase label: `function` | `method` | `hook` | `interface` | `type` |
   `enum` | `class` | `const` | `config` | `component` | `jsx` | `logic` | `guard` | `loop` |
   `import` | `export` | `schema` | `test` | `effect`.
-- `text` — one to three sentences that *describe* the block. Purely descriptive — do NOT
-  judge, praise, or suggest changes.
-
-Coverage: aim for one insight per logical block within the changed regions, in line order,
-non-overlapping where possible (nest only when a smaller block genuinely merits its own
-note). Only reference line numbers present in this file's hunks. Skip pure noise (blank
-lines, a lone closing brace, trivial one-line re-exports). Config/lockfile/generated files
-may have few or no insights. These are toggled on/off in the UI, so density is welcome.
+- `level` — attention weight, one of `notable` or `routine` (default `routine` if omitted):
+  - `notable` — the reviewer should not skim past this: a behavior change with a
+    consequence, a breaking change for named callers, a subtle invariant, a why-it-exists
+    that reframes the block. The UI renders these emphasized. Use sparingly — a file where
+    everything is notable has nothing notable.
+  - `routine` — useful context that can be scanned quickly (a straightforward new helper, a
+    small local delta with no external reach). The UI renders these dim/compact.
+- `text` — one to three sentences. Still **descriptive, not evaluative**: state what changed
+  / what it touches / why, but do not judge, praise, or say "you should fix". Evaluative
+  "worth checking" guidance stays in the group's `thingsToConfirm`. (An insight can say "the
+  new required field breaks `CitationList.tsx`" — a fact; it should not say "this will break
+  things, reconsider" — a judgement.)
 
 Analysis schema (what you write to the analysis file):
 
@@ -207,8 +231,10 @@ Analysis schema (what you write to the analysis file):
           "description": "New module exporting a `rateLimit` middleware factory.",
           "hunkIds": ["src/middleware/rateLimit.ts#0"],
           "insights": [
-            { "side": "RIGHT", "startLine": 1, "endLine": 6, "kind": "function",
-              "text": "Factory that returns a middleware closure holding one shared token bucket." }
+            { "side": "RIGHT", "startLine": 1, "endLine": 6, "kind": "function", "level": "notable",
+              "text": "New `rateLimit` factory — wired into the pipeline in `app.ts:42`, ahead of `authenticate`. The bucket is created once at factory time and shared across requests, so limits are global, not per-connection." },
+            { "side": "RIGHT", "startLine": 8, "endLine": 10, "kind": "const", "level": "routine",
+              "text": "Default bucket size / refill rate; only referenced by this factory." }
           ]
         }
       ]
@@ -293,17 +319,19 @@ group), rendered as a "Things worth confirming" section under the reasoning.
 renders a per-group **file manifest** linking each file to its diff. Falls back to
 `description` if absent.
 
-`insights[]` are **read-only descriptive subtitles — one per logical block** (function,
-interface, const group, class, component, notable conditional, test block…). Each
-describes what the block is, what it does, its parameters/inputs and output, and what it's
-used for — like explanatory comments woven over the file so the reviewer always knows what
-they're looking at. Each has `side` (`RIGHT`/`LEFT`), a line **range**
-`startLine`/`endLine` spanning the whole block, a lowercase `kind` (the block type, e.g.
-`function`/`interface`/`const`/`component`/`test`), and descriptive `text`. The UI marks
+`insights[]` are **read-only annotations that tell the reviewer what the code doesn't** —
+for a changed block, what moved and its consequence; who calls it (blast radius); why it
+exists (PR intent); and, only where non-obvious, what it does. They are authored for the
+*change*, not as a narration of every block (see Stage B for the full authoring rules). Each
+has `side` (`RIGHT`/`LEFT`), a line **range** `startLine`/`endLine` spanning the whole block,
+a lowercase `kind` (the block type, e.g. `function`/`interface`/`const`/`component`/`test`),
+a `level` (`notable` or `routine`, default `routine`), and descriptive `text`. The UI marks
 the block with a left rail and renders the 💡 subtitle **above the first line**, labelled
-with the covered lines (e.g. "Lines 12–20"). They can be dense — a sidebar toggle hides
-them for a bare diff. Insights are never part of the exported review. (Older data with a
-single `line` still works.)
+with the covered lines (e.g. "Lines 12–20"); `notable` insights render emphasized and
+`routine` ones dim/compact, so the important ones stand out in a long file. A sidebar toggle
+hides them all for a bare diff. Insights stay descriptive (facts, not judgements — evaluation
+lives in `thingsToConfirm`) and are never part of the exported review. (Older data with a
+single `line`, or with no `level`, still works — a missing `level` renders as `routine`.)
 
 `fullContent` (optional per file) is the file's complete text at the head SHA, added by
 the merge step's `--repo/--sha` fetch. When present the UI adds **"⋯ expand context"**
@@ -340,11 +368,12 @@ page looks the same and only the injected data differs. It provides:
   gaps around each hunk; clicking reveals the surrounding real file lines (a chunk at a
   time, or all) inline, so the reviewer can trace how a change sits in the file without
   loading a separate full-file view. Revealed lines are commentable too.
-- **Inline insight subtitles**: read-only 💡 annotations (from each file's `insights[]`),
-  one per logical block, describing what each block is/does/takes/is-used-for — like
-  explanatory comments over the file. Each marks its block with a left rail and renders
-  **above the block's first line**, labelled with the covered lines. A sidebar toggle
-  hides them for a bare diff. They never enter the exported review.
+- **Inline insight subtitles**: read-only 💡 annotations (from each file's `insights[]`)
+  aimed at the *change* — what moved and its consequence, who calls it, why it exists — not
+  a narration of every block. Each marks its block with a left rail and renders **above the
+  block's first line**, labelled with the covered lines; `notable` insights render
+  emphasized and `routine` ones dim/compact so the important ones stand out. A sidebar
+  toggle hides them for a bare diff. They never enter the exported review.
 - **Three comment levels**: click a line to comment on it, click "Comment on this file"
   for a file-level comment, and the sidebar summary for the overall review. Comments are
   stored in state and re-rendered, so editing one never loses it.
