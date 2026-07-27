@@ -57,9 +57,9 @@ Per the skill, gather (use `--repo <slug>` when you have one):
 
 If the PR is merged/closed with an empty diff, report the state and stop.
 
-## Step 3 — Parse → analyze → merge (the pipeline; see skill §2)
+## Step 3 — Parse → analyze → assemble → merge (the pipeline; see skill §2)
 
-The grouping JSON is built by three stages; **the diff never passes through the model as
+The grouping JSON is built by four stages; **the diff never passes through the model as
 output**, and **every stage runs in the main chat — do not spawn a subagent.**
 
 1. **Parse (deterministic):** resolve the plugin root first (see skill §2 "Resolving the
@@ -77,11 +77,23 @@ output**, and **every stage runs in the main chat — do not spawn a subagent.**
    plain-language summary of what the whole PR achieves), then groups with neutral
    `reasoning`, `thingsToConfirm`, per-file `role`/`description`/`insights`, and the
    `hunkIds` that are each group's concern — **no code** (reference hunks by `hunkId`). Write
-   it to `/tmp/pr-$1-analysis.json` with a quoted-delimiter heredoc, then run the validation
-   snippet from the skill (§2). The payload is small (titles + prose + ids + line numbers),
-   so authoring it inline is reliable at any PR size. The skill (§2) has the full field-by-
-   field guidance for grouping and for the per-block insight subtitles.
-3. **Merge (deterministic):** `python3 …/scripts/merge_analysis.py /tmp/pr-$1-parsed.json /tmp/pr-$1-analysis.json /tmp/pr-$1-groups.json --repo <owner/name> --sha <headSha>`.
+   it as **small per-group fragment files** into `/tmp/pr-$1-analysis.d/` — one bounded
+   quoted-delimiter heredoc each: `00-overview.json`, then `NN-<groupid>.json` per group (the
+   `NN` prefix sets on-screen order). Writing fragments — not one giant heredoc — is what keeps
+   large PRs reliable: a dropped response loses only that one fragment, which you re-write.
+   The skill (§2) has the full field-by-field guidance for grouping and for the per-block
+   insight subtitles.
+3. **Assemble & validate (deterministic + your review):** stitch the fragments into
+   `/tmp/pr-$1-analysis.json`:
+   `python3 …/scripts/assemble_analysis.py /tmp/pr-$1-analysis.d /tmp/pr-$1-analysis.json`
+   (fragments are read in sorted filename order; a truncated fragment errors here naming the
+   file, so only it is re-written). Then run **both** skill (§2) checks on the assembled file:
+   the `hunkId` cross-check, **and the insight line-number re-read** — it prints the actual
+   code at each insight's `startLine`/`endLine` so you confirm every bubble sits on the block
+   its text describes. Fix any mis-anchored line numbers (never hand-count — read the number
+   off `parsed.json`), re-assemble, and re-check until clean **before** merging. This is what
+   prevents insight bubbles from rendering a few lines off in the built UI.
+4. **Merge (deterministic):** `python3 …/scripts/merge_analysis.py /tmp/pr-$1-parsed.json /tmp/pr-$1-analysis.json /tmp/pr-$1-groups.json --repo <owner/name> --sha <headSha>`.
    This joins the analysis onto the real hunks, embeds `fullContent` (for "⋯ expand
    context") via `--repo`/`--sha`, and **enforces invariants**: it errors on unknown
    `hunkId`s, and **guarantees coverage**: any unplaced hunk or hunkless file (binary,
@@ -100,8 +112,10 @@ the fixed template, the vendored `highlight.min.js` and `hljs-github-theme.css`,
 Then open it (`open /tmp/pr-$1-review.html` on macOS).
 
 Tell the user the page has: a top **overview card** summarizing what the whole PR achieves,
-a **sidebar** (summary, one-click export button, a **Diff view** selector — Unified / Split,
-an insights show/hide toggle, a things-to-confirm show/hide toggle, group nav), collapsible
+a **sidebar** organized into Navigate (a foldable, nested **Files changed** tree that scrolls
+to any file — unfolding its group if collapsed — and a foldable **Groups** nav), View (a
+**Diff view** selector — Unified / Split, an insights show/hide toggle, a things-to-confirm
+show/hide toggle), and Review (summary + one-click export button), collapsible
 **groups** with reasoning, a "Things worth confirming" list (which the toggle hides), and a
 file manifest **table** (File | Role, linking to each file's
 diff), and per **file** a rich header + neutral description + IDE-highlighted diff. A file

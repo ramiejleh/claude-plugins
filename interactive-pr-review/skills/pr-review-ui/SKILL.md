@@ -23,7 +23,8 @@ wants to review a PR carefully.
    SHA, or they will fail to attach or attach to the wrong revision.
 4. **The grouping JSON lives in a temp file, by design.** It is far too large to pass
    through the conversation. You author the analysis directly (in the main chat — no
-   subagent) and write it to a temp file, then inject it into the HTML with a script.
+   subagent) and write it as small per-group fragment files that a script assembles and
+   merges into that temp JSON, then inject it into the HTML with a script.
    Neither the big JSON nor the big HTML should be pasted into the main context. The temp
    files are kept afterward (so a review can be reopened) and removed only via the manual
    `cleanup` command — never auto-deleted at the end of a review.
@@ -62,19 +63,22 @@ If `gh` is unavailable, fall back to the REST API with `curl` and a
 `GITHUB_TOKEN`/`GH_TOKEN`, requesting `Accept: application/vnd.github.v3.diff` for the
 diff. Always prefer `gh`.
 
-## 2. Parse → analyze → merge (the pipeline)
+## 2. Parse → analyze → assemble → merge (the pipeline)
 
-The grouping JSON is built by three stages. **The diff never passes through the language
-model as output** — deterministic scripts own it; you (in the main chat) produce only the
-analysis layer, which is small. This makes the "diff is sacred" rule structural (you can't
-alter a line you never emit) and eliminates the huge-response failures that plagued the
-earlier one-shot approach. The scripts and assets live under the plugin root at
-`skills/pr-review-ui/{scripts,assets}/` — see **Resolving the plugin root** below for how to
-locate it reliably from a shell.
+The grouping JSON is built by four stages: **parse → write per-group fragments → assemble →
+merge**. **The diff never passes through the language model as output** — deterministic
+scripts own it; you (in the main chat) produce only the analysis layer, which is small. This
+makes the "diff is sacred" rule structural (you can't alter a line you never emit) and
+eliminates the huge-response failures that plagued the earlier one-shot approach. The scripts
+and assets live under the plugin root at `skills/pr-review-ui/{scripts,assets}/` — see
+**Resolving the plugin root** below for how to locate it reliably from a shell.
 
-**Run every stage in the main conversation — do not spawn a subagent.** Stages A and C are
-plain script calls. Stage B is authored by you directly: you read the parsed diff and write
-a small analysis-only JSON.
+**Run every stage in the main conversation — do not spawn a subagent.** Stages A, C, and D
+are plain script calls. Stage B is authored by you directly: you read the parsed diff and
+write the analysis as **small per-group fragment files** (one bounded write each), which
+Stage C stitches into the analysis JSON. Writing the analysis in fragments — rather than one
+giant heredoc — is what keeps large PRs reliable: if a single write is dropped mid-stream,
+only that one fragment is lost and re-written, not the whole analysis.
 
 ### Resolving the plugin root
 
@@ -117,11 +121,37 @@ newLine, text} ] } ] } ] }`. This is the byte-exact source of truth for the code
 top-level `overview`, then groups with titles, neutral `reasoning`, `thingsToConfirm`,
 per-file `role`/`description`/`insights`, and the `hunkIds` that are each group's file's
 concern. Emit **no code**: reference hunks by their `hunkId`, never reproduce their lines.
-Write the result to `/tmp/pr-<number>-analysis.json` with a heredoc using a **quoted
-delimiter** (`<<'JSON'`), then validate it (see the validation snippet below). Because this
-payload is titles + prose + ids + line numbers, it is a small fraction of the diff's size —
-write it in a single heredoc; there is no need to chunk it, and there is no subagent
-round-trip.
+
+Write the analysis as **many small fragment files** in a per-PR directory, one bounded write
+each, instead of one giant heredoc. This is what keeps large PRs reliable: a dropped response
+loses only the one fragment it was writing. Use a **quoted delimiter** heredoc (`<<'JSON'`)
+for each so nothing is expanded:
+
+```bash
+PR=<number>
+FRAG=/tmp/pr-$PR-analysis.d
+mkdir -p "$FRAG"
+
+# One overview fragment (numbered first so it sorts to the top):
+cat > "$FRAG/00-overview.json" <<'JSON'
+{ "overview": "…concise, holistic summary of what the whole PR achieves…" }
+JSON
+
+# One fragment PER GROUP — NN prefix = on-screen order (01, 02, 03, …).
+# Write each group in its own bounded heredoc; large PRs may have many of these.
+cat > "$FRAG/01-g1.json" <<'JSON'
+{ "id": "g1", "title": "…", "reasoning": "…", "thingsToConfirm": ["…"],
+  "files": [ { "path": "…", "role": "…", "description": "…",
+               "hunkIds": ["…#0"], "insights": [ … ] } ] }
+JSON
+# … repeat 02-g2.json, 03-g3.json, … one write per group.
+```
+
+Each fragment is one self-contained JSON object (see the schema below): `00-overview.json`
+holds `{"overview": …}`; each `NN-<groupid>.json` holds one group object. The numeric prefix
+sets the order groups appear on screen (keep it aligned with "most-important-first"). Because
+each write is a small fraction of the diff, none is at risk of being truncated; if one ever is,
+just re-write that single file. There is no subagent round-trip.
 
 How to author each field:
 
@@ -200,12 +230,17 @@ none. Insights are toggleable in the UI, but that is not a licence to pad.
 Each insight has:
 - `side` — `RIGHT` for added/context lines (the common case); `LEFT` only when describing
   removed code.
-- `startLine` / `endLine` — the inclusive line range of the whole block on that side, using
-  the numbers in `parsed.json`. **`startLine` must be exact** (the block's opening
-  signature/declaration line). For `endLine`, cover the block to its closing line; if unsure
-  of the exact close, under-estimate — the merge step **auto-snaps `endLine` forward** to the
-  true closing brace via brace + indentation analysis, so a slightly short `endLine` is fine
-  but a wrong `startLine` is not. Single-line blocks use equal values.
+- `startLine` / `endLine` — the inclusive line range of the whole block on that side.
+  **Never count or estimate line numbers by hand — that is exactly how bubbles drift out of
+  alignment.** Every line in `parsed.json` already carries its real number: read it off the
+  line object. Locate the block's opening line by its text, then copy that line's `newLine`
+  (RIGHT side) or `oldLine` (LEFT side) as `startLine`; do the same on the block's closing
+  line for `endLine`. **The `startLine` must land exactly on the opening
+  signature/declaration line** — the UI renders the bubble directly above it, so an off-by-N
+  `startLine` puts the whole bubble on the wrong code. For `endLine`, if unsure of the exact
+  close, under-estimate — the merge step **auto-snaps `endLine` forward** to the true closing
+  brace via brace + indentation analysis, so a slightly short `endLine` is fine but a wrong
+  `startLine` is not. Single-line blocks use equal values.
 - `kind` — a short lowercase label: `function` | `method` | `hook` | `interface` | `type` |
   `enum` | `class` | `const` | `config` | `component` | `jsx` | `logic` | `guard` | `loop` |
   `import` | `export` | `schema` | `test` | `effect`.
@@ -255,7 +290,17 @@ Analysis schema (what you write to the analysis file):
 }
 ```
 
-**Stage C — merge (deterministic, no LLM).** Join the analysis onto the parsed hunks,
+**Stage C — assemble (deterministic, no LLM).** Stitch the fragment files into a single
+`analysis.json` — the exact schema Stage D consumes. Fragments are read in **sorted filename
+order** (so `00-`, `01-`, `02-`… = on-screen group order); a truncated fragment is caught
+here with an error naming the file, so only that one needs re-writing:
+
+```bash
+python3 "$SCRIPTS/assemble_analysis.py" /tmp/pr-$PR-analysis.d /tmp/pr-$PR-analysis.json
+# -> OK assembled: overview=yes groups=N from M fragment(s) -> /tmp/pr-$PR-analysis.json
+```
+
+**Stage D — merge (deterministic, no LLM).** Join the analysis onto the parsed hunks,
 optionally embedding full file contents, producing the final UI groups JSON. For every group
 a file appears in, it emits that file's **whole diff** (all hunks) and flags each hunk
 `relevant: true/false` from the group's `hunkIds`, plus a `focusNote` naming the relevant
@@ -282,8 +327,8 @@ a meaningful group, though the review is still complete either way.
 
 ### Validate the analysis before merging
 
-After writing the analysis file, confirm it parses and every `hunkId` exists (cross-checking
-against `parsed.json`):
+After assembling, confirm the analysis parses and every `hunkId` exists (cross-checking
+against `parsed.json`). Run this on the assembled `/tmp/pr-$PR-analysis.json`:
 
 ```bash
 python3 - /tmp/pr-$PR-analysis.json /tmp/pr-$PR-parsed.json <<'PY'
@@ -306,8 +351,57 @@ Fix any `ERROR unknown hunkIds` before merging. Aim for zero `WARNING unassigned
 — not because they'd be lost (the merge sweeps them into "Other changes"), but because a
 deliberately grouped file reviews better than one dumped in the catch-all.
 
-The analysis is small (titles + prose + ids + line numbers), so authoring it inline is
-reliable regardless of PR size. There is no subagent step.
+### Re-read every insight's line range against the code (before building the UI)
+
+The UI renders each insight bubble **directly above its `startLine`**, so a `startLine` that
+is off by even a few lines puts the whole bubble on the wrong code. This is the single most
+common alignment bug, and it is invisible once the HTML is built — so **catch it here, before
+the merge/build**. This snippet does not guess: it prints, for every RIGHT-side insight, the
+**actual code** sitting at its `startLine` and `endLine` (from `parsed.json`), so you read the
+code back instead of trusting a number you wrote:
+
+```bash
+python3 - /tmp/pr-$PR-analysis.json /tmp/pr-$PR-parsed.json <<'PY'
+import json, sys
+a = json.load(open(sys.argv[1])); parsed = json.load(open(sys.argv[2]))
+# Per file: {newLine: text} on the RIGHT side, and total lines shown.
+right = {}
+for f in parsed["files"]:
+    m = {}
+    for h in f["hunks"]:
+        for ln in h["lines"]:
+            if ln.get("newLine") is not None:
+                m[ln["newLine"]] = ln["text"]
+    right[f["path"]] = m
+for g in a["groups"]:
+    for f in g["files"]:
+        m = right.get(f["path"], {})
+        for ins in f.get("insights", []):
+            if ins.get("side", "RIGHT") != "RIGHT":
+                continue
+            s, e = ins.get("startLine"), ins.get("endLine", ins.get("startLine"))
+            flags = []
+            if s not in m: flags.append("START-NOT-IN-DIFF")
+            if e is not None and e not in m and e != s: flags.append("END-NOT-IN-DIFF")
+            if e is not None and s is not None and e < s: flags.append("END<START")
+            print("%s L%s-%s %s %s" % (f["path"], s, e, ins.get("kind",""),
+                                       ("  <-- " + ",".join(flags)) if flags else ""))
+            print("    start-> %s" % (repr(m.get(s)) if s in m else "(line not shown in diff)"))
+            print("    text :  %s" % ((ins.get("text") or "")[:70]))
+PY
+```
+
+Read each `start->` line: does that code actually **open the block the `text` describes**? If
+a bubble says "`requireEnv` throws on any missing var" but `start->` shows
+`const result = await stack...`, the `startLine` is wrong — find the real opening line's
+number in `parsed.json` and correct it (and shift `endLine` by the same amount). Any
+`START-NOT-IN-DIFF` / `END<START` flag is a definite error to fix. Re-run `assemble` after
+editing the fragment, then re-run this check until every `start->` matches its `text`. Only
+then merge and build.
+
+Writing the analysis as small per-group fragments — assembled deterministically — keeps it
+reliable regardless of PR size: a dropped write costs one fragment, not the whole analysis.
+There is no subagent step.
 
 ### Final groups JSON (merge output — what the UI consumes)
 
@@ -385,10 +479,15 @@ Only lines present in the diff can be commented on. Multi-line comments also sen
 The UI is `assets/review-template.html`. Its structure is **fixed** — every generated
 page looks the same and only the injected data differs. It provides:
 
-- A **sticky sidebar** with PR title/stats, the review summary box, a one-click
-  "Copy all comments as JSON" button, an insights show/hide toggle, a things-to-confirm
-  show/hide toggle, and a clickable group table-of-contents. (No approve/request-changes
-  action — this is a comments-only tool.)
+- A **sticky sidebar** with PR title/stats, organized into three clusters: **Navigate**
+  (a collapsible **Files changed** tree and a collapsible **Groups** table-of-contents),
+  **View** (the Diff view selector, insights toggle, things-to-confirm toggle), and
+  **Review** (the summary box and the one-click "Copy all comments as JSON" button). The
+  Files changed tree is a true nested hierarchy — one foldable level per directory segment,
+  indented further at each depth — with every changed file as a clickable leaf (for a file
+  spanning groups, its first occurrence); clicking one scrolls to that file and unfolds its
+  group if it was collapsed. Both Navigate sections fold in/out independently. (No
+  approve/request-changes action — this is a comments-only tool.)
 - A top **overview card** (from the top-level `overview`) summarizing what the whole PR
   achieves, shown above the groups. Omitted when `overview` is empty.
 - A main column of collapsible **groups**, each with a neutral reasoning line, a
@@ -421,7 +520,7 @@ The template has three placeholder tokens, each appearing exactly once:
 `/* __HLJS_LIB__ */`, `/* __HLJS_THEME__ */`, and `/*__PR_REVIEW_DATA__*/ null`.
 
 > Full file contents (for the "⋯ expand context" feature) are fetched by the **merge
-> step** (Stage C) when you pass `--repo`/`--sha` — no separate fetch pass is needed. A
+> step** (Stage D) when you pass `--repo`/`--sha` — no separate fetch pass is needed. A
 > file whose content can't be fetched (deleted, moved, permission) simply has no
 > `fullContent` and shows no expand affordance; the diff itself is unaffected. Larger
 > content means a larger HTML file — warn the user if the total is very large (> ~5 MB).

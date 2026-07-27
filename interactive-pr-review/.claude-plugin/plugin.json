@@ -1,6 +1,6 @@
 {
   "name": "interactive-pr-review",
-  "version": "1.16.0",
+  "version": "1.17.0",
   "description": "Interactively review GitHub PRs — Claude fetches the PR, groups the diff into logical chunks with reasoning, presents them in a review UI, and posts your line comments back to GitHub.",
   "author": {
     "name": "Rami Ejleh",

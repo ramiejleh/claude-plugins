@@ -7,9 +7,10 @@ allowed-tools: Bash
 # Clean up cached PR review artifacts
 
 The `interactive-pr-review` plugin keeps its temp artifacts (`/tmp/pr-<n>.diff`,
-`-meta.json`, `-parsed.json`, `-analysis.json`, `-groups.json`, `-review.html`,
-`-review-payload.json`) after a review so they can be reopened with
-`/interactive-pr-review:reopen <n>`. This command removes them when you're done.
+`-meta.json`, `-parsed.json`, `-analysis.d/` (the per-group analysis fragments),
+`-analysis.json`, `-groups.json`, `-review.html`, `-review-payload.json`) after a review so
+they can be reopened with `/interactive-pr-review:reopen <n>`. This command removes them when
+you're done.
 
 `$1` is optional:
 - `$1` given (a PR number) → remove only that PR's artifacts.
@@ -36,6 +37,11 @@ PRs** (`$1` empty), match `pr-*`:
 python3 - "$1" <<'PY'
 import glob, os, sys
 pr = sys.argv[1] if len(sys.argv) > 1 else ""
+def entry_size(p):  # getsize() on a dir reports only the inode; sum the tree instead.
+    if not os.path.isdir(p):
+        return os.path.getsize(p)
+    return sum(os.path.getsize(os.path.join(r, n))
+               for r, _, ns in os.walk(p) for n in ns)
 if pr:
     files = sorted(set(glob.glob("/tmp/pr-%s.diff" % pr) + glob.glob("/tmp/pr-%s-*" % pr)))
     scope = "#" + pr
@@ -47,9 +53,10 @@ if not files:
 else:
     total = 0
     for f in files:
-        sz = os.path.getsize(f); total += sz
-        print("  %8.1f KB  %s" % (sz / 1024, f))
-    print("%d file(s), %.1f KB total, for %s." % (len(files), total / 1024, scope))
+        sz = entry_size(f); total += sz
+        label = f + "/" if os.path.isdir(f) else f
+        print("  %8.1f KB  %s" % (sz / 1024, label))
+    print("%d entr(y/ies), %.1f KB total, for %s." % (len(files), total / 1024, scope))
 PY
 ```
 
@@ -68,7 +75,7 @@ can never target anything the preview didn't show:
 
 ```bash
 python3 - "$1" <<'PY'
-import glob, os, sys
+import glob, os, shutil, sys
 pr = sys.argv[1] if len(sys.argv) > 1 else ""
 if pr:
     files = sorted(set(glob.glob("/tmp/pr-%s.diff" % pr) + glob.glob("/tmp/pr-%s-*" % pr)))
@@ -77,10 +84,11 @@ else:
 n = 0
 for f in files:
     try:
-        os.remove(f); n += 1
+        shutil.rmtree(f) if os.path.isdir(f) else os.remove(f)  # -analysis.d/ is a directory
+        n += 1
     except OSError as e:
         print("  could not remove %s: %s" % (f, e))
-print("Removed %d file(s)." % n)
+print("Removed %d entr(y/ies)." % n)
 PY
 ```
 

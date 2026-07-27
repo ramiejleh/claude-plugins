@@ -97,6 +97,57 @@
   }
   nav.toc a:hover { background: var(--btn-hover); }
   nav.toc a .n { color: var(--muted); }
+
+  /* Collapsible sidebar section: a details/summary pair whose summary is the section label,
+     using the same ▸ fold affordance as the diff groups. */
+  details.sb-section { display: flex; flex-direction: column; gap: 8px; }
+  details.sb-section > summary {
+    cursor: pointer; list-style: none; user-select: none;
+    display: flex; align-items: center; gap: 6px;
+  }
+  details.sb-section > summary::-webkit-details-marker { display: none; }
+  details.sb-section > summary::before {
+    content: "▸"; color: var(--muted); font-size: 10px; transition: transform .15s;
+    flex: 0 0 auto;
+  }
+  details.sb-section[open] > summary::before { transform: rotate(90deg); }
+  /* Divider that separates the sidebar's clusters (navigate / view / review). */
+  .sidebar .sep { border-top: 1px solid var(--border); padding-top: 16px; }
+
+  /* File tree: directories nest as foldable rows that indent one step per level (--depth),
+     each holding its subdirectories and clickable file leaves. Navigation only. */
+  nav.filetree { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
+  nav.filetree details.ft-node { display: block; }
+  nav.filetree summary.ft-dir {
+    color: var(--muted); font-size: 11px; cursor: pointer; list-style: none;
+    user-select: none; display: flex; align-items: center; gap: 5px; border-radius: 6px;
+    padding: 4px 8px; padding-left: calc(8px + var(--depth, 0) * 12px); word-break: break-all;
+  }
+  nav.filetree summary.ft-dir::-webkit-details-marker { display: none; }
+  nav.filetree summary.ft-dir::before {
+    content: "▸"; font-size: 9px; transition: transform .15s; flex: 0 0 auto;
+  }
+  nav.filetree details.ft-node[open] > summary.ft-dir::before { transform: rotate(90deg); }
+  nav.filetree summary.ft-dir:hover { background: var(--btn-hover); }
+  nav.filetree .ft-file {
+    color: var(--text); text-decoration: none; font-size: 12px;
+    padding: 4px 8px; padding-left: calc(8px + var(--depth, 0) * 12px + 14px);
+    border-radius: 6px; display: flex; justify-content: space-between; gap: 8px;
+    align-items: baseline; cursor: pointer; border: none; background: none;
+    text-align: left; width: 100%; font-family: inherit;
+  }
+  nav.filetree .ft-file:hover { background: var(--btn-hover); }
+  nav.filetree .ft-file .ft-name { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  nav.filetree .ft-file .ft-stats { flex: 0 0 auto; font-size: 11px; }
+  nav.filetree .ft-file .ft-stats .add { color: var(--add-text); }
+  nav.filetree .ft-file .ft-stats .del { color: var(--del-text); margin-left: 4px; }
+
+  /* Brief highlight when a file is jumped to from the tree. */
+  @keyframes ft-flash {
+    from { background: var(--insight-scope-tint); } to { background: transparent; }
+  }
+  .file.ft-jumped { animation: ft-flash 1.2s ease-out; }
   .count-pill {
     background: var(--accent); color: #fff; border-radius: 10px; padding: 0 7px;
     font-size: 11px; min-width: 18px; text-align: center; display: inline-block;
@@ -369,7 +420,7 @@
       position: static; width: 100%; height: auto; flex-basis: auto;
       border-right: none; border-bottom: 1px solid var(--border);
     }
-    nav.toc { display: none; }
+    #sec-groups { display: none; }
     .toast { left: 50%; }
   }
 </style>
@@ -383,21 +434,19 @@
       <div class="stats" id="pr-stats"></div>
     </div>
 
-    <section>
-      <span class="section-label">Review summary
-        <span class="count-pill" id="comment-count">0</span></span>
-      <textarea id="summary" placeholder="Overall thoughts on this PR (optional if you left inline or file comments)…"></textarea>
-    </section>
+    <!-- Navigate: jump around the diff by file or by group. -->
+    <details class="sb-section" id="sec-files" open>
+      <summary class="section-label">Files changed <span class="count-pill" id="file-count">0</span></summary>
+      <nav class="filetree" id="filetree"></nav>
+    </details>
 
-    <section>
-      <span class="section-label">Export</span>
-      <button class="primary" id="copy-btn">Copy all comments as JSON</button>
-      <span class="hint">Copies your summary, line comments, and file comments together
-        in one JSON. Paste it back into Claude to post them to GitHub as review
-        comments.</span>
-    </section>
+    <details class="sb-section" id="sec-groups" open>
+      <summary class="section-label">Groups</summary>
+      <nav class="toc" id="toc"></nav>
+    </details>
 
-    <section>
+    <!-- View: how the diff is displayed. -->
+    <section class="sep">
       <span class="section-label">Diff view</span>
       <select id="view-mode">
         <option value="unified">Unified (inline)</option>
@@ -427,9 +476,19 @@
         not part of your review. Turn off to hide them all.</span>
     </section>
 
+    <!-- Review: compose and export your comments. -->
+    <section class="sep">
+      <span class="section-label">Review summary
+        <span class="count-pill" id="comment-count">0</span></span>
+      <textarea id="summary" placeholder="Overall thoughts on this PR (optional if you left inline or file comments)…"></textarea>
+    </section>
+
     <section>
-      <span class="section-label">Groups</span>
-      <nav class="toc" id="toc"></nav>
+      <span class="section-label">Export</span>
+      <button class="primary" id="copy-btn">Copy all comments as JSON</button>
+      <span class="hint">Copies your summary, line comments, and file comments together
+        in one JSON. Paste it back into Claude to post them to GitHub as review
+        comments.</span>
     </section>
   </aside>
 
@@ -538,6 +597,10 @@ function render() {
   confirmCount = (DATA.groups || []).filter(g =>
     Array.isArray(g.thingsToConfirm) && g.thingsToConfirm.length).length;
 
+  // First-occurrence jump target per file (a file spanning concerns appears in several
+  // groups; the tree links to the first, since that's where its diff first shows).
+  const fileNav = new Map();
+
   (DATA.groups || []).forEach((g, gi) => {
     const gid = g.id || ("g" + (gi + 1));
     const files = g.files || [];
@@ -560,6 +623,14 @@ function render() {
 
     // Per-file DOM ids so the manifest can link to each file within this group.
     const fileId = (fi) => gid + "-f" + fi;
+
+    // Record each file's first-seen jump target for the sidebar file tree.
+    files.forEach((f, fi) => {
+      if (f.path && !fileNav.has(f.path)) {
+        fileNav.set(f.path, { gid, domId: fileId(fi),
+          additions: f.additions, deletions: f.deletions });
+      }
+    });
 
     // Manifest: how the files in this group fit together. A table keeps the file and role
     // columns aligned regardless of how long any path or role is. Uses each file's `role`
@@ -587,6 +658,7 @@ function render() {
     root.appendChild(details);
   });
   updateCount();
+  buildFileTree(fileNav);
   document.getElementById("insight-count").textContent = insightCount;
 
   // Insights toggle: default on; disabled when there are none.
@@ -603,6 +675,74 @@ function render() {
     confirmToggle.checked = false; confirmToggle.disabled = true;
     document.body.classList.add("hide-confirm");
   }
+}
+
+// Build the sidebar file tree: a real nested hierarchy, one foldable level per directory
+// segment (indenting further at each depth), with clickable file leaves. Clicking a file
+// unfolds its group and scrolls. Navigation only — the fold state carries no review meaning.
+function buildFileTree(fileNav) {
+  const tree = document.getElementById("filetree");
+  tree.innerHTML = "";
+  document.getElementById("file-count").textContent = fileNav.size;
+
+  // Sort by path so sibling dirs and files render in a stable, grouped order.
+  const entries = [...fileNav.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  // Nest every path segment into a directory tree: each node holds child dirs (kept in
+  // insertion order) and file leaves, giving one indent level per directory.
+  const root = { dirs: new Map(), files: [] };
+  entries.forEach(([path, nav]) => {
+    const parts = path.split("/");
+    const name = parts.pop();
+    let node = root;
+    parts.forEach(seg => {
+      if (!node.dirs.has(seg)) node.dirs.set(seg, { dirs: new Map(), files: [] });
+      node = node.dirs.get(seg);
+    });
+    node.files.push({ name, path, nav });
+  });
+
+  // Render a node's subdirectories (foldable) then its files, indenting by depth.
+  (function renderNode(node, parent, depth) {
+    node.dirs.forEach((child, seg) => {
+      const det = document.createElement("details");
+      det.className = "ft-node";
+      det.open = true;
+      const sum = document.createElement("summary");
+      sum.className = "ft-dir";
+      sum.style.setProperty("--depth", depth);
+      sum.textContent = seg + "/";
+      det.appendChild(sum);
+      parent.appendChild(det);
+      renderNode(child, det, depth + 1);
+    });
+    node.files.forEach(({ name, path, nav }) => {
+      const stats = [];
+      if (nav.additions != null) stats.push("<span class='add'>+" + esc(nav.additions) + "</span>");
+      if (nav.deletions != null) stats.push("<span class='del'>−" + esc(nav.deletions) + "</span>");
+      const btn = document.createElement("button");
+      btn.className = "ft-file";
+      btn.type = "button";
+      btn.title = path;
+      btn.style.setProperty("--depth", depth);
+      btn.innerHTML = "<span class='ft-name'>" + esc(name) + "</span>" +
+        (stats.length ? "<span class='ft-stats'>" + stats.join("") + "</span>" : "");
+      btn.addEventListener("click", () => jumpToFile(nav.gid, nav.domId));
+      parent.appendChild(btn);
+    });
+  })(root, tree, 0);
+}
+
+// Scroll to a file, unfolding its (possibly collapsed) group first, and flash it briefly.
+function jumpToFile(gid, domId) {
+  const group = document.getElementById(gid);
+  if (group && group.tagName === "DETAILS") group.open = true;
+  const el = document.getElementById(domId);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "start" });
+  el.classList.remove("ft-jumped");
+  void el.offsetWidth;            // restart the animation if the same file is re-clicked
+  el.classList.add("ft-jumped");
 }
 
 // Whether any file carries embedded full content (enables expandable context).
