@@ -73,9 +73,8 @@ If you have the folder on disk, install straight from it — handy while develop
 
 ### For your team (from the marketplace repo)
 
-Once the marketplace has been pushed to GitHub (maintainer steps in
-[PUBLISHING.md](../PUBLISHING.md)), each teammate adds the marketplace once and installs
-the plugin from it:
+Once the marketplace has been pushed to GitHub, each teammate adds the marketplace once and
+installs the plugin from it:
 
 ```
 /plugin marketplace add ramiejleh/claude-plugins
