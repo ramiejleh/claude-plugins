@@ -24,7 +24,8 @@ highlights, and annotates it — it never rewrites the code under review.
   +/− counts) and a neutral, one-to-two sentence description of what changed (purely
   descriptive — it never judges the code).
 - **"Things worth confirming"** — each group lists a few concrete things to focus on, so
-  evaluative guidance is separated from the neutral descriptions.
+  evaluative guidance is separated from the neutral descriptions. Toggle them off from the
+  sidebar (like the insight annotations) when you want just the diff.
 - **Per-group file manifest** — each group opens with a two-column table (file, role)
   linking down to each file's diff, so you can trace how the files work together before
   diving in — aligned columns regardless of how long any path or role is.
@@ -142,7 +143,8 @@ moved):
    no code, only references to the parsed hunks — keeping your main context clean.
 3. **Review** — Claude generates and opens a self-contained HTML UI at
    `/tmp/pr-<number>-review.html`: a sidebar (summary, one-click export, insights toggle,
-   group nav) beside collapsible groups, each file syntax-highlighted with a rich header,
+   things-to-confirm toggle, group nav) beside collapsible groups, each file
+   syntax-highlighted with a rich header,
    description, and 💡 insight bubbles. Comment at the line, file, or whole-review level.
 4. **Export** — click **Copy all comments as JSON** (one click captures the summary and
    every line and file comment together) and paste the result back into the chat.

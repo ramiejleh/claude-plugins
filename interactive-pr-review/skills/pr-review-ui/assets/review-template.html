@@ -146,6 +146,12 @@
   }
   .confirm ul { margin: 0; padding-left: 18px; }
   .confirm li { margin: 2px 0; color: var(--muted); }
+  body.hide-confirm .confirm { display: none; }
+  /* Confirm hidden but still in the DOM, so :has(+ .confirm) keeps matching — give the
+     reasoning back the divider that the confirm block would have owned. */
+  body.hide-confirm .reasoning:has(+ .confirm) {
+    border-bottom: 1px solid var(--border); padding-bottom: 14px;
+  }
 
   /* Manifest: how the files in a group fit together (a table for aligned columns). */
   .manifest { padding: 12px 16px 14px; border-bottom: 1px solid var(--border); }
@@ -412,6 +418,16 @@
     </section>
 
     <section>
+      <span class="section-label">Things to confirm <span class="count-pill" id="confirm-count">0</span></span>
+      <div class="toggle-row">
+        <input type="checkbox" id="toggle-confirm" checked />
+        <label for="toggle-confirm">✓ Show things worth confirming</label>
+      </div>
+      <span class="hint">Each group's short list of things worth a closer look. Advisory —
+        not part of your review. Turn off to hide them all.</span>
+    </section>
+
+    <section>
       <span class="section-label">Groups</span>
       <nav class="toc" id="toc"></nav>
     </section>
@@ -438,6 +454,8 @@ const fileComments = new Map();
 
 // Count of AI insight bubbles rendered (read-only; not part of the review).
 let insightCount = 0;
+// Count of groups carrying a "things worth confirming" list (advisory; not part of the review).
+let confirmCount = 0;
 
 // Current diff view mode: "unified" | "split" | "full".
 let viewMode = "unified";
@@ -516,6 +534,9 @@ function render() {
   // Count insights once, from the data (bubbles are re-rendered many times).
   insightCount = (DATA.groups || []).reduce((sum, g) =>
     sum + (g.files || []).reduce((s, f) => s + (f.insights || []).length, 0), 0);
+  // Count groups that carry a "things worth confirming" list.
+  confirmCount = (DATA.groups || []).filter(g =>
+    Array.isArray(g.thingsToConfirm) && g.thingsToConfirm.length).length;
 
   (DATA.groups || []).forEach((g, gi) => {
     const gid = g.id || ("g" + (gi + 1));
@@ -574,6 +595,14 @@ function render() {
     toggle.checked = false; toggle.disabled = true;
     document.body.classList.add("hide-insights");
   }
+
+  // Things-to-confirm toggle: default on; disabled when no group has a list.
+  document.getElementById("confirm-count").textContent = confirmCount;
+  const confirmToggle = document.getElementById("toggle-confirm");
+  if (confirmCount === 0) {
+    confirmToggle.checked = false; confirmToggle.disabled = true;
+    document.body.classList.add("hide-confirm");
+  }
 }
 
 // Whether any file carries embedded full content (enables expandable context).
@@ -592,6 +621,10 @@ function wireControls() {
   const toggle = document.getElementById("toggle-insights");
   toggle.addEventListener("change", () =>
     document.body.classList.toggle("hide-insights", !toggle.checked));
+
+  const confirmToggle = document.getElementById("toggle-confirm");
+  confirmToggle.addEventListener("change", () =>
+    document.body.classList.toggle("hide-confirm", !confirmToggle.checked));
 
   const view = document.getElementById("view-mode");
   const hint = document.getElementById("view-hint");

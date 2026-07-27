@@ -101,8 +101,9 @@ Then open it (`open /tmp/pr-$1-review.html` on macOS).
 
 Tell the user the page has: a top **overview card** summarizing what the whole PR achieves,
 a **sidebar** (summary, one-click export button, a **Diff view** selector — Unified / Split,
-an insights show/hide toggle, group nav), collapsible **groups** with reasoning, a "Things
-worth confirming" list, and a file manifest **table** (File | Role, linking to each file's
+an insights show/hide toggle, a things-to-confirm show/hide toggle, group nav), collapsible
+**groups** with reasoning, a "Things worth confirming" list (which the toggle hides), and a
+file manifest **table** (File | Role, linking to each file's
 diff), and per **file** a rich header + neutral description + IDE-highlighted diff. A file
 that appears in several groups shows its **full diff** in each, with the hunks that aren't
 this group's concern dimmed and a focus note naming the relevant lines. Around each hunk,

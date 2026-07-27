@@ -386,13 +386,15 @@ The UI is `assets/review-template.html`. Its structure is **fixed** — every ge
 page looks the same and only the injected data differs. It provides:
 
 - A **sticky sidebar** with PR title/stats, the review summary box, a one-click
-  "Copy all comments as JSON" button, an insights show/hide toggle, and a clickable group
-  table-of-contents. (No approve/request-changes action — this is a comments-only tool.)
+  "Copy all comments as JSON" button, an insights show/hide toggle, a things-to-confirm
+  show/hide toggle, and a clickable group table-of-contents. (No approve/request-changes
+  action — this is a comments-only tool.)
 - A top **overview card** (from the top-level `overview`) summarizing what the whole PR
   achieves, shown above the groups. Omitted when `overview` is empty.
 - A main column of collapsible **groups**, each with a neutral reasoning line, a
-  "Things worth confirming" list, and a **file manifest table** (File | Role, linking down
-  to each file's diff) so the reviewer can trace how the files fit together.
+  "Things worth confirming" list (hidden by the sidebar toggle, like the insights), and a
+  **file manifest table** (File | Role, linking down to each file's diff) so the reviewer
+  can trace how the files fit together.
 - Per **file**: a rich header (status pill, path + rename arrow, language, +/− counts),
   the AI `description`, an optional **focus note** (when the file spans groups: which lines
   are this group's concern), a "Comment on this file" button, and an IDE-syntax-highlighted
