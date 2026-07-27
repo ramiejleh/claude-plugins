@@ -113,28 +113,37 @@ deletions, hunks: [ { hunkId, header, oldStart, newStart, lines: [ {type, oldLin
 newLine, text} ] } ] } ] }`. This is the byte-exact source of truth for the code.
 
 **Stage B — analyze (you, in the main chat — no subagent).** Read `/tmp/pr-<number>-parsed.json`
-(and the raw `.diff` for extra context if useful) and author the **analysis only** — groups,
-titles, neutral `reasoning`, `thingsToConfirm`, per-file `role`/`description`/`insights`, and
-the `hunkIds` each group's file includes. Emit **no code**: reference hunks by their
-`hunkId`, never reproduce their lines. Write the result to `/tmp/pr-<number>-analysis.json`
-with a heredoc using a **quoted delimiter** (`<<'JSON'`), then validate it (see the
-validation snippet below). Because this payload is titles + prose + ids + line numbers, it
-is a small fraction of the diff's size — write it in a single heredoc; there is no need to
-chunk it, and there is no subagent round-trip.
+(and the raw `.diff` for extra context if useful) and author the **analysis only** — a
+top-level `overview`, then groups with titles, neutral `reasoning`, `thingsToConfirm`,
+per-file `role`/`description`/`insights`, and the `hunkIds` that are each group's file's
+concern. Emit **no code**: reference hunks by their `hunkId`, never reproduce their lines.
+Write the result to `/tmp/pr-<number>-analysis.json` with a heredoc using a **quoted
+delimiter** (`<<'JSON'`), then validate it (see the validation snippet below). Because this
+payload is titles + prose + ids + line numbers, it is a small fraction of the diff's size —
+write it in a single heredoc; there is no need to chunk it, and there is no subagent
+round-trip.
 
 How to author each field:
 
+- **`overview`** (top-level, 1–3 short sentences / paragraphs): a holistic, plain-language
+  summary of what the whole PR achieves and why — the big picture a reviewer wants before
+  reading any diff. Concise and simple; describe the outcome, not a file-by-file list.
+  Rendered as a card at the top of the review UI. Separate paragraphs with a blank line.
 - **Group logically.** Bundle changes a reviewer should consider together — by
   feature/concern (across files), pairing implementation with its tests, separating core
   changes from incidental ones (config, lockfiles, generated, vendored). Order groups
   most-important-first; incidental last.
-- **Assign hunks to groups by hunk.** Each group's file entry lists the `hunkIds` it
-  includes. If a file's hunks belong to different concerns, list that file in EACH relevant
-  group with only that group's `hunkIds`. **Every `hunkId` from `parsed.json` should be
-  assigned to exactly one group** — none dropped, none duplicated. Still, aim for full,
-  deliberate coverage: anything you don't place is a file the reviewer sees under a generic
-  "Other changes" heading instead of in a meaningful group. (The merge step **guarantees**
-  nothing is hidden — see below — but a well-grouped review places every file on purpose.)
+- **Assign each hunk to its group(s) via `hunkIds`.** Each group's file entry lists the
+  `hunkIds` that are **that group's concern**. The UI still shows the file's **whole diff**
+  in every group it appears in (a file is never chunked across groups) — `hunkIds` only flag
+  which hunks are the focus here; the rest render dimmed for context, and a focus note names
+  the relevant lines. If a file's hunks belong to different concerns, list that file in EACH
+  relevant group with that group's `hunkIds`; the same hunk may legitimately be the concern
+  of more than one group. **Every `hunkId` from `parsed.json` should be some group's
+  concern** — none dropped. Aim for full, deliberate coverage: anything you don't place is a
+  file the reviewer sees under a generic "Other changes" heading instead of in a meaningful
+  group. (The merge step **guarantees** nothing is hidden — see below — but a well-grouped
+  review places every file on purpose.)
 - **`reasoning`** (per group, 1–3 sentences): purely descriptive and neutral — what this
   group does and how the pieces relate. No evaluation, no "you should check", no
   "risk/concern/looks good".
@@ -217,6 +226,7 @@ Analysis schema (what you write to the analysis file):
 
 ```json
 {
+  "overview": "Adds request rate limiting to the API. A token-bucket limiter is inserted ahead of authentication so abusive clients are shed before any auth work, with limits shared across the process.",
   "groups": [
     {
       "id": "g1",
@@ -246,18 +256,22 @@ Analysis schema (what you write to the analysis file):
 ```
 
 **Stage C — merge (deterministic, no LLM).** Join the analysis onto the parsed hunks,
-optionally embedding full file contents, producing the final UI groups JSON. This
-**enforces coverage as a hard guarantee, not a warning**: it errors if any referenced
-`hunkId` is unknown; it sweeps any hunk the analysis left unassigned — and any file with no
-hunks at all (binary, pure rename, mode change) that no group surfaced — into a synthetic
-**"Other changes"** group in diff order; and it then `die()`s if, after that sweep, any hunk
-or file is *still* not shown. So **every changed file always appears in the UI**, regardless
-of how the analysis grouped them — the model cannot hide a file by omission.
+optionally embedding full file contents, producing the final UI groups JSON. For every group
+a file appears in, it emits that file's **whole diff** (all hunks) and flags each hunk
+`relevant: true/false` from the group's `hunkIds`, plus a `focusNote` naming the relevant
+lines when the file is only partly this group's concern — so a file is never chunked across
+groups. It also passes the top-level `overview` through. This **enforces coverage as a hard
+guarantee, not a warning**: it errors if any referenced `hunkId` is unknown; it sweeps any
+hunk the analysis left unplaced — and any file with no hunks at all (binary, pure rename,
+mode change) that no group surfaced — into a synthetic **"Other changes"** group in diff
+order; and it then `die()`s if, after that sweep, any hunk or file is *still* not shown. So
+**every changed file always appears in the UI**, regardless of how the analysis grouped them
+— the model cannot hide a file by omission.
 
 ```bash
 python3 "$SCRIPTS/merge_analysis.py" /tmp/pr-$PR-parsed.json /tmp/pr-$PR-analysis.json \
   /tmp/pr-$PR-groups.json --repo owner/name --sha <headSha>
-# -> OK groups: G files: F hunks: H insights: I [| swept N unassigned file(s) into 'Other changes'] -> …
+# -> OK groups: G files: F hunks: H insights: I [| swept N unassigned file(s) into 'Other changes'] [| note N file(s) shown in multiple groups (full diff each)] -> …
 ```
 
 Passing `--repo`/`--sha` makes the merge fetch each text file's content at the head SHA
@@ -298,35 +312,45 @@ reliable regardless of PR size. There is no subagent step.
 ### Final groups JSON (merge output — what the UI consumes)
 
 `files[]` is nested inside each group; each file carries header fields, `role`,
-`description`, `insights`, optional `fullContent`, and full byte-exact `hunks` (from the
-parser). **A file spanning concerns appears in multiple groups**, each with only that
-group's hunks. Shape:
+`description`, optional `focusNote`, `insights`, optional `fullContent`, and full byte-exact
+`hunks` (from the parser). **A file spanning concerns appears in multiple groups, each
+carrying the file's whole diff** — every hunk is present in each copy, tagged `relevant`
+(this group's concern) or not; `focusNote` names the relevant lines when the file is only
+partly this group's concern. A top-level `overview` string precedes `groups`. Shape:
 
 ```json
 {
   "pr": { "number": 128, "title": "…", "author": "…", "base": "main", "head": "feature/x",
           "url": "…", "additions": 210, "deletions": 34, "changedFiles": 7, "headSha": "…" },
+  "overview": "Plain-language summary of what the whole PR achieves.",
   "groups": [ { "id": "g1", "title": "…", "reasoning": "…", "thingsToConfirm": ["…"],
     "files": [ { "path": "…", "previousPath": null, "status": "added", "language": "typescript",
-      "additions": 40, "deletions": 0, "role": "…", "description": "…",
+      "additions": 40, "deletions": 0, "role": "…", "description": "…", "focusNote": null,
       "insights": [ { "side": "RIGHT", "startLine": 1, "endLine": 6, "kind": "function", "text": "…" } ],
       "fullContent": "…optional…",
-      "hunks": [ { "header": "@@ …", "oldStart": 0, "newStart": 1,
+      "hunks": [ { "header": "@@ …", "oldStart": 0, "newStart": 1, "relevant": true,
         "lines": [ { "type": "add", "oldLine": null, "newLine": 1, "text": "…" } ] } ] } ] } ]
 }
 ```
 
 `type` is `add` | `del` | `context`. `text` is the line without its `+`/`-`/space marker.
 `status` is `added` | `modified` | `removed` | `renamed` | `binary`. `language` is a
-highlight.js name or null.
+highlight.js name or null. `relevant` (per hunk) is `true` when the hunk is this group's
+concern and `false` when it is shown only as context (the UI dims non-relevant hunks).
+
+`overview` (top-level) is a plain-language summary of what the whole PR achieves, rendered
+as a card at the top of the review, above the groups.
 
 `reasoning` (per group) and `description` (per file) are **purely descriptive and
 neutral** — no evaluation. All "focus here" guidance lives in `thingsToConfirm` (per
 group), rendered as a "Things worth confirming" section under the reasoning.
 
 `role` (per file) is a short phrase naming the file's responsibility in the group; the UI
-renders a per-group **file manifest** linking each file to its diff. Falls back to
-`description` if absent.
+renders a per-group **file manifest table** (File | Role) linking each file to its diff.
+Falls back to `description` if absent. `focusNote` (per file, optional) is set only when a
+file appears in several groups and this group is just part of its concern; it names the
+relevant lines (e.g. `"12–20, 44"`) and the UI shows a note that the rest of the diff is
+context.
 
 `insights[]` are **read-only annotations that tell the reviewer what the code doesn't** —
 for a changed block, what moved and its consequence; who calls it (blast radius); why it
@@ -364,13 +388,17 @@ page looks the same and only the injected data differs. It provides:
 - A **sticky sidebar** with PR title/stats, the review summary box, a one-click
   "Copy all comments as JSON" button, an insights show/hide toggle, and a clickable group
   table-of-contents. (No approve/request-changes action — this is a comments-only tool.)
+- A top **overview card** (from the top-level `overview`) summarizing what the whole PR
+  achieves, shown above the groups. Omitted when `overview` is empty.
 - A main column of collapsible **groups**, each with a neutral reasoning line, a
-  "Things worth confirming" list, and a **file manifest** (each file's role in the group,
-  linking down to its diff) so the reviewer can trace how the files fit together.
+  "Things worth confirming" list, and a **file manifest table** (File | Role, linking down
+  to each file's diff) so the reviewer can trace how the files fit together.
 - Per **file**: a rich header (status pill, path + rename arrow, language, +/− counts),
-  the AI `description`, a "Comment on this file" button, and an IDE-syntax-highlighted
+  the AI `description`, an optional **focus note** (when the file spans groups: which lines
+  are this group's concern), a "Comment on this file" button, and an IDE-syntax-highlighted
   diff (via vendored highlight.js) with GitHub-style add/remove backgrounds and dual
-  line numbers.
+  line numbers. When a file appears in several groups it shows its **full diff** in each,
+  with the hunks that aren't this group's concern dimmed (still commentable).
 - A **Diff view** selector (sidebar) with two modes: **Unified** (inline, default) and
   **Split** (old on the left, new on the right).
 - **Expandable context**: when `fullContent` is embedded, "⋯ expand" rows appear in the

@@ -73,21 +73,24 @@ output**, and **every stage runs in the main chat — do not spawn a subagent.**
    ```
    This assigns stable `hunkId`s and is the byte-exact source of truth for the code.
 2. **Analyze (you, in the main chat):** read `/tmp/pr-$1-parsed.json` (and `/tmp/pr-$1.diff`
-   for extra context) and author the **analysis only** — groups, neutral `reasoning`,
-   `thingsToConfirm`, per-file `role`/`description`/`insights`, and the `hunkIds` each group
-   includes — **no code** (reference hunks by `hunkId`). Write it to
-   `/tmp/pr-$1-analysis.json` with a quoted-delimiter heredoc, then run the validation
+   for extra context) and author the **analysis only** — a top-level `overview` (a concise,
+   plain-language summary of what the whole PR achieves), then groups with neutral
+   `reasoning`, `thingsToConfirm`, per-file `role`/`description`/`insights`, and the
+   `hunkIds` that are each group's concern — **no code** (reference hunks by `hunkId`). Write
+   it to `/tmp/pr-$1-analysis.json` with a quoted-delimiter heredoc, then run the validation
    snippet from the skill (§2). The payload is small (titles + prose + ids + line numbers),
    so authoring it inline is reliable at any PR size. The skill (§2) has the full field-by-
    field guidance for grouping and for the per-block insight subtitles.
 3. **Merge (deterministic):** `python3 …/scripts/merge_analysis.py /tmp/pr-$1-parsed.json /tmp/pr-$1-analysis.json /tmp/pr-$1-groups.json --repo <owner/name> --sha <headSha>`.
    This joins the analysis onto the real hunks, embeds `fullContent` (for "⋯ expand
    context") via `--repo`/`--sha`, and **enforces invariants**: it errors on unknown
-   `hunkId`s, and **guarantees coverage**: any unassigned hunk or hunkless file (binary,
+   `hunkId`s, and **guarantees coverage**: any unplaced hunk or hunkless file (binary,
    rename) not placed by the analysis is swept into a synthetic "Other changes" group, and
    the merge errors out if anything is still unshown — so every changed file always appears.
-   If the output notes files were swept into "Other changes", consider revising the analysis
-   to group them meaningfully (the review is complete either way).
+   A file listed in several groups keeps its **full diff** in each (the `hunkIds` only flag
+   which hunks are that group's concern). If the output notes files were swept into "Other
+   changes", consider revising the analysis to group them meaningfully (the review is
+   complete either way).
 
 ## Step 4 — Build and open the review UI
 
@@ -96,12 +99,15 @@ the fixed template, the vendored `highlight.min.js` and `hljs-github-theme.css`,
 `/tmp/pr-$1-groups.json`, replaces the three tokens, and writes the self-contained HTML.
 Then open it (`open /tmp/pr-$1-review.html` on macOS).
 
-Tell the user the page has: a **sidebar** (summary, one-click export button, a **Diff
-view** selector — Unified / Split, an insights show/hide toggle, group nav), collapsible
-**groups** with reasoning, a "Things worth confirming" list, and a file manifest (each
-file's role in the group, linking to its diff), and per **file** a rich header + neutral
-description + IDE-highlighted diff. Around each hunk, "⋯ expand context" reveals the
-surrounding real file lines on demand. Inline 💡 **insight subtitles** sit above each
+Tell the user the page has: a top **overview card** summarizing what the whole PR achieves,
+a **sidebar** (summary, one-click export button, a **Diff view** selector — Unified / Split,
+an insights show/hide toggle, group nav), collapsible **groups** with reasoning, a "Things
+worth confirming" list, and a file manifest **table** (File | Role, linking to each file's
+diff), and per **file** a rich header + neutral description + IDE-highlighted diff. A file
+that appears in several groups shows its **full diff** in each, with the hunks that aren't
+this group's concern dimmed and a focus note naming the relevant lines. Around each hunk,
+"⋯ expand context" reveals the surrounding real file lines on demand. Inline 💡 **insight
+subtitles** sit above each
 logical block (function, interface, const group, component, conditional, test…),
 describing what it is/does/takes/is-used-for — like explanatory comments over the file;
 toggle them off for a bare diff. They can comment at three levels —

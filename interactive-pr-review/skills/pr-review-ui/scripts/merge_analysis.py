@@ -14,6 +14,7 @@ Usage:
 
 Analysis JSON schema (produced by the analyzer):
 {
+  "overview": "Concise, holistic paragraph: what this PR achieves in simple terms.",
   "groups": [
     {
       "id": "g1", "title": "…", "reasoning": "…",
@@ -22,7 +23,8 @@ Analysis JSON schema (produced by the analyzer):
         {
           "path": "src/x.ts",
           "role": "…", "description": "…",
-          "hunkIds": ["src/x.ts#0", "src/x.ts#2"],
+          "hunkIds": ["src/x.ts#0", "src/x.ts#2"],   # hunks RELEVANT to this group
+                                                      # (full file diff is still shown)
           "insights": [
             { "side": "RIGHT", "startLine": 12, "endLine": 14, "kind": "function",
               "level": "notable", "text": "…" }
@@ -34,10 +36,14 @@ Analysis JSON schema (produced by the analyzer):
 }
 
 Final groups JSON matches the review UI schema: groups -> files[] with header fields,
-role, description, insights, and full `hunks` (byte-exact, from the parsed data).
+role, description, insights, and full `hunks` (byte-exact, from the parsed data). A file
+touched by several concerns appears in EACH relevant group, and each copy carries the
+file's WHOLE diff — hunks the analyzer flagged for that group are `relevant: true`, the
+rest are shown as context (`relevant: false`) so a file is never chunked across groups.
 Invariants enforced here (not merely requested of the model):
   * every referenced hunkId exists (else error);
-  * every parsed hunk is assigned to exactly one group (warn on drops / dupes).
+  * every parsed hunk is shown in at least one group (swept to "Other changes" else,
+    then a hard error if still unshown).
 """
 import base64
 import json
@@ -157,31 +163,49 @@ def main(argv):
                 # Analyzer named a file the parser didn't produce — skip, but note.
                 missing.append("(file) " + path)
                 continue
-            ids = af.get("hunkIds")
-            # If no hunkIds given, default to ALL of the file's hunks (single-group file).
-            if not ids:
-                ids = [h["hunkId"] for h in pf["hunks"]]
-            hunks = []
-            for hid in ids:
-                h = hunk_by_id.get(hid)
-                if h is None:
+            # `hunkIds` = the hunks RELEVANT to this group's concern. We still show the
+            # file's WHOLE diff in every group it appears in (never chunk a file across
+            # groups), but flag which hunks are the relevant ones so the UI can focus them.
+            relevant_ids = af.get("hunkIds")
+            # If none given, the whole file is relevant to this (its only) group.
+            if not relevant_ids:
+                relevant_ids = [h["hunkId"] for h in pf["hunks"]]
+            relevant_set = set(relevant_ids)
+            for hid in relevant_ids:
+                if hid not in hunk_by_id:
                     missing.append(hid)
-                    continue
-                assigned[hid] = assigned.get(hid, 0) + 1
-                hunks.append({k: h[k] for k in ("header", "oldStart", "newStart", "lines")})
-            # Skip an empty entry only when the file DOES have hunks but none landed here
-            # (a redundant/duplicate group entry). A file with no hunks at all (binary,
-            # pure rename, mode change) is legitimate and must still be shown, so let it
-            # through with an empty hunks list.
-            if not hunks and pf["hunks"]:
+            # A referenced-but-unknown hunkId is a hard error (caught below); skip building.
+            if any(hid not in hunk_by_id for hid in relevant_ids):
                 continue
-            # Per-group +/- counts for the subset of hunks shown here.
+            # Emit the file's FULL diff (all hunks), tagging each with whether it is
+            # relevant to this group. Every shown hunk counts as assigned.
+            hunks = []
+            for h in pf["hunks"]:
+                assigned[h["hunkId"]] = assigned.get(h["hunkId"], 0) + 1
+                entry = {k: h[k] for k in ("header", "oldStart", "newStart", "lines")}
+                entry["relevant"] = h["hunkId"] in relevant_set
+                hunks.append(entry)
+            # +/- counts over the whole file's diff (matching what is shown).
             add = sum(1 for h in hunks for ln in h["lines"] if ln["type"] == "add")
             dele = sum(1 for h in hunks for ln in h["lines"] if ln["type"] == "del")
+            # Focus note: only when the file has BOTH relevant and non-relevant hunks, so a
+            # single-concern file shows nothing extra. Lists the relevant hunks' line ranges.
+            focus_note = None
+            if hunks and any(h["relevant"] for h in hunks) and not all(h["relevant"] for h in hunks):
+                spans = []
+                for h in hunks:
+                    if not h["relevant"]:
+                        continue
+                    nums = [ln["newLine"] for ln in h["lines"] if ln["newLine"] is not None] \
+                        or [ln["oldLine"] for ln in h["lines"] if ln["oldLine"] is not None]
+                    if nums:
+                        lo, hi = min(nums), max(nums)
+                        spans.append(str(lo) if lo == hi else "%d–%d" % (lo, hi))
+                focus_note = ", ".join(spans) if spans else None
             # Snap each RIGHT-side insight's endLine to the true end of its block, so a
             # bubble always brackets the whole function/interface/etc even when the
-            # analyzer's estimate stopped short. Only extends within this file's shown
-            # hunks; never shrinks a range the analyzer gave.
+            # analyzer's estimate stopped short. Built from the file's full shown diff;
+            # never shrinks a range the analyzer gave.
             linemap = {}
             for h in hunks:
                 for ln in h["lines"]:
@@ -206,6 +230,7 @@ def main(argv):
                 "deletions": dele,
                 "role": af.get("role"),
                 "description": af.get("description", ""),
+                "focusNote": focus_note,
                 "insights": insights,
                 "hunks": hunks,
             })
@@ -237,8 +262,8 @@ def main(argv):
         shown_elsewhere = pf["path"] in shown_paths
         if not leftover and (pf["hunks"] or shown_elsewhere):
             continue
-        hunks = [{k: h[k] for k in ("header", "oldStart", "newStart", "lines")}
-                 for h in leftover]
+        hunks = [dict({k: h[k] for k in ("header", "oldStart", "newStart", "lines")},
+                      relevant=True) for h in leftover]
         for h in leftover:
             assigned[h["hunkId"]] = assigned.get(h["hunkId"], 0) + 1
         add = sum(1 for h in hunks for ln in h["lines"] if ln["type"] == "add")
@@ -253,6 +278,7 @@ def main(argv):
             "role": None,
             "description": "Not assigned to a themed group above; included here so the "
                            "review always covers every changed file.",
+            "focusNote": None,
             "insights": [],
             "hunks": hunks,
         })
@@ -279,8 +305,13 @@ def main(argv):
         die("internal error: %d file(s) not shown in any group: %s"
             % (len(unshown_files), ", ".join(unshown_files[:10])))
 
-    # Report: hunks shown in more than one group (informational, allowed by design).
-    dup = sorted(hid for hid, c in assigned.items() if c > 1)
+    # Report: files shown in more than one group (informational, allowed by design — a
+    # file touched by several concerns appears in each, with its full diff every time).
+    path_groups = {}
+    for g in out_groups:
+        for f in g["files"]:
+            path_groups[f["path"]] = path_groups.get(f["path"], 0) + 1
+    dup = sorted(p for p, c in path_groups.items() if c > 1)
 
     # Optionally embed full file contents for the expand-context feature.
     if repo and sha:
@@ -292,7 +323,9 @@ def main(argv):
                 if c is not None:
                     f["fullContent"] = c
 
-    out = {"pr": parsed.get("pr", {}), "groups": out_groups}
+    out = {"pr": parsed.get("pr", {}),
+           "overview": analysis.get("overview", ""),
+           "groups": out_groups}
     with open(out_path, "w", encoding="utf-8") as fh:
         json.dump(out, fh, ensure_ascii=False)
 
@@ -307,7 +340,7 @@ def main(argv):
             ", ".join(f["path"] for f in catch_files[:10])
             + (" …" if len(catch_files) > 10 else ""))
     if dup:
-        msg += " | note %d hunk(s) shown in multiple groups: %s" % (
+        msg += " | note %d file(s) shown in multiple groups (full diff each): %s" % (
             len(dup), ", ".join(dup[:10]) + (" …" if len(dup) > 10 else ""))
     print(msg + " -> " + out_path)
     return 0

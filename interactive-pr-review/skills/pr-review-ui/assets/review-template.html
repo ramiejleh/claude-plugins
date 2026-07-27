@@ -104,6 +104,19 @@
 
   /* ---- Main column ---- */
   main { flex: 1 1 auto; min-width: 0; max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+  /* Overview: a holistic "what this PR achieves" card at the top of the review. */
+  .overview {
+    border: 1px solid var(--border); border-radius: 10px; margin-bottom: 24px;
+    background: var(--panel); padding: 16px 18px;
+  }
+  .overview-title {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    font-weight: 700; color: var(--accent); margin-bottom: 8px;
+  }
+  .overview p { margin: 0 0 8px; color: var(--text); }
+  .overview p:last-child { margin-bottom: 0; }
+
   .group {
     border: 1px solid var(--border); border-radius: 10px; margin-bottom: 24px;
     background: var(--panel); overflow: hidden; scroll-margin-top: 16px;
@@ -134,28 +147,34 @@
   .confirm ul { margin: 0; padding-left: 18px; }
   .confirm li { margin: 2px 0; color: var(--muted); }
 
-  /* Manifest: how the files in a group fit together */
+  /* Manifest: how the files in a group fit together (a table for aligned columns). */
   .manifest { padding: 12px 16px 14px; border-bottom: 1px solid var(--border); }
   .manifest-title {
     font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
     font-weight: 700; color: var(--muted); margin-bottom: 8px;
   }
-  .manifest ul { margin: 0; padding: 0; list-style: none;
-    display: flex; flex-direction: column; gap: 7px; }
-  .manifest li {
-    display: grid; grid-template-columns: minmax(120px, max-content) 1fr;
-    gap: 4px 14px; align-items: baseline;
+  table.manifest-table { width: 100%; border-collapse: collapse; }
+  table.manifest-table th {
+    text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); font-weight: 700; padding: 0 12px 6px 0;
+    border-bottom: 1px solid var(--border);
   }
-  .manifest li a {
+  table.manifest-table td {
+    padding: 7px 12px 7px 0; vertical-align: top;
+    border-bottom: 1px solid var(--border);
+  }
+  table.manifest-table tr:last-child td { border-bottom: none; }
+  table.manifest-table .mfile { width: 40%; }
+  table.manifest-table .mfile a {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
-    font-weight: 600; color: var(--accent); text-decoration: none;
+    font-weight: 600; color: var(--accent); text-decoration: none; word-break: break-all;
   }
-  .manifest li a:hover { text-decoration: underline; }
-  .manifest .mpath {
-    grid-column: 1; font-family: ui-monospace, monospace; font-size: 10.5px;
-    color: var(--line-no); word-break: break-all;
+  table.manifest-table .mfile a:hover { text-decoration: underline; }
+  table.manifest-table .mpath {
+    display: block; font-family: ui-monospace, monospace; font-size: 10.5px;
+    color: var(--line-no); word-break: break-all; margin-top: 2px;
   }
-  .manifest .mrole { grid-column: 2; grid-row: 1 / span 2; color: var(--text); opacity: .9; }
+  table.manifest-table .mrole { color: var(--text); opacity: .9; }
 
   /* ---- File block ---- */
   .file { border-top: 1px solid var(--border); scroll-margin-top: 12px; }
@@ -185,6 +204,15 @@
     border: 1px solid var(--border); border-radius: 4px; padding: 0 5px;
   }
   .file-desc { font-size: 13px; color: var(--text); opacity: .92; }
+  /* Focus note: shown only when a file appears in several groups; names which lines are
+     this group's concern while the rest of the diff is shown for context. */
+  .file-focus {
+    font-size: 12px; color: var(--muted); display: flex; align-items: baseline; gap: 6px;
+    border-left: 2px solid var(--accent); padding: 2px 0 2px 8px;
+  }
+  .file-focus .flines {
+    font-family: ui-monospace, monospace; font-weight: 600; color: var(--accent);
+  }
   .file-header .actions { margin-top: 2px; }
   .file-comment-btn {
     background: var(--btn); border: 1px solid var(--border); color: var(--text);
@@ -225,6 +253,10 @@
   tr.del .marker { color: var(--del-text); }
   tr.commentable td.code:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
   tr.commentable.selected td.code { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* Context hunks: a file shown in a group it only partly belongs to still shows its WHOLE
+     diff; the hunks that aren't this group's concern are dimmed (still fully commentable). */
+  table.diff tr.hunk-context td { opacity: .5; }
+  table.diff tr.hunk-context td.code:hover { opacity: 1; }
   /* highlight.js sets its own token colors; keep the diff bg from the row. */
   td.code .hljs { background: transparent; padding: 0; display: inline; }
 
@@ -471,6 +503,16 @@ function render() {
   toc.innerHTML = "";
   root.innerHTML = "";
   fileBodies.length = 0;
+
+  // Overview: holistic summary of what the PR achieves, above the groups.
+  if (DATA.overview && String(DATA.overview).trim()) {
+    const ov = document.createElement("div");
+    ov.className = "overview";
+    const paras = String(DATA.overview).trim().split(/\n\s*\n/)
+      .map(p => "<p>" + esc(p.trim()) + "</p>").join("");
+    ov.innerHTML = "<div class='overview-title'>What this PR does</div>" + paras;
+    root.appendChild(ov);
+  }
   // Count insights once, from the data (bubbles are re-rendered many times).
   insightCount = (DATA.groups || []).reduce((sum, g) =>
     sum + (g.files || []).reduce((s, f) => s + (f.insights || []).length, 0), 0);
@@ -498,17 +540,20 @@ function render() {
     // Per-file DOM ids so the manifest can link to each file within this group.
     const fileId = (fi) => gid + "-f" + fi;
 
-    // Manifest: how the files in this group fit together. Uses each file's `role`
+    // Manifest: how the files in this group fit together. A table keeps the file and role
+    // columns aligned regardless of how long any path or role is. Uses each file's `role`
     // (short phrase) if present, else its neutral description.
     const manifest = fileCount
-      ? "<div class='manifest'><div class='manifest-title'>📄 Files in this group</div><ul>" +
+      ? "<div class='manifest'><div class='manifest-title'>📄 Files in this group</div>" +
+        "<table class='manifest-table'><thead><tr><th class='mfile'>File</th>" +
+        "<th class='mrole'>Role</th></tr></thead><tbody>" +
         files.map((f, fi) => {
           const role = f.role || f.description || "";
           const name = (f.path || "").split("/").pop();
-          return "<li><a href='#" + fileId(fi) + "'>" + esc(name) + "</a>" +
-            "<span class='mpath'>" + esc(f.path) + "</span>" +
-            (role ? "<span class='mrole'>" + esc(role) + "</span>" : "") + "</li>";
-        }).join("") + "</ul></div>"
+          return "<tr><td class='mfile'><a href='#" + fileId(fi) + "'>" + esc(name) + "</a>" +
+            "<span class='mpath'>" + esc(f.path) + "</span></td>" +
+            "<td class='mrole'>" + esc(role) + "</td></tr>";
+        }).join("") + "</tbody></table></div>"
       : "";
 
     details.innerHTML =
@@ -584,6 +629,11 @@ function renderFile(f, domId) {
     "</div>" +
     (meta.length ? "<div class='file-meta'>" + meta.join("") + "</div>" : "") +
     (f.description ? "<div class='file-desc'>" + esc(f.description) + "</div>" : "") +
+    (f.focusNote
+      ? "<div class='file-focus'>🎯<span>This group's changes are at " +
+        "<span class='flines'>line" + (/[–,]/.test(f.focusNote) ? "s" : "") + " " +
+        esc(f.focusNote) + "</span>; the rest of the file's diff is shown for context.</span></div>"
+      : "") +
     "<div class='actions'><button class='file-comment-btn' data-path='" + esc(f.path) +
       "'>💬 Comment on this file</button></div>";
   wrap.appendChild(header);
@@ -652,16 +702,18 @@ function drawFileBody(f, body, lang) {
           hi === 0 ? "up" : "between", ins, fullLines));
       }
     }
-    // Hunk header row
+    // Hunk header row. A hunk not relevant to this group (the file appears here as full
+    // context for another concern) is dimmed via `hunk-context`.
+    const ctx = h.relevant === false;
     const hr = document.createElement("tr");
-    hr.className = "hunk";
+    hr.className = "hunk" + (ctx ? " hunk-context" : "");
     hr.innerHTML = split
       ? "<td class='ln'></td><td class='code'>" + esc(h.header || "") + "</td>" +
         "<td class='ln'></td><td class='code'>" + esc(h.header || "") + "</td>"
       : "<td class='ln'></td><td class='ln'></td><td class='code'>" + esc(h.header || "") + "</td>";
     table.appendChild(hr);
-    if (split) drawHunkSplit(h, table, f, lang, ins);
-    else drawHunkUnified(h, table, f, lang, ins);
+    if (split) drawHunkSplit(h, table, f, lang, ins, ctx);
+    else drawHunkUnified(h, table, f, lang, ins, ctx);
   });
 
   // Context gap after the last hunk (down to end of file).
@@ -765,7 +817,7 @@ function appendContextLine(frag, f, table, lang, cols, n, text, ins) {
 }
 
 // Build one unified diff line <tr> plus its insight bubbles (above) / comment slot (below).
-function drawHunkUnified(h, table, f, lang, ins) {
+function drawHunkUnified(h, table, f, lang, ins, ctx) {
   (h.lines || []).forEach(ln => {
     const type = ln.type === "add" ? "add" : ln.type === "del" ? "del" : "context";
     const side = type === "del" ? "LEFT" : "RIGHT";
@@ -774,7 +826,7 @@ function drawHunkUnified(h, table, f, lang, ins) {
     // Insight bubbles that START on this line render ABOVE it.
     if (num != null) ins.byStart.get(side + "::" + num)?.forEach(one => table.appendChild(insightRow(one, 3)));
     const tr = document.createElement("tr");
-    tr.className = type + " commentable" + (spanned ? " insight-scope" : "");
+    tr.className = type + " commentable" + (spanned ? " insight-scope" : "") + (ctx ? " hunk-context" : "");
     const marker = type === "add" ? "+" : type === "del" ? "-" : " ";
     tr.innerHTML =
       "<td class='ln'>" + (ln.oldLine == null ? "" : ln.oldLine) + "</td>" +
@@ -795,7 +847,7 @@ function drawHunkUnified(h, table, f, lang, ins) {
 }
 
 // Split view: pair del/add lines into left|right columns; comments/insights span full width.
-function drawHunkSplit(h, table, f, lang, ins) {
+function drawHunkSplit(h, table, f, lang, ins, ctx) {
   const rows = pairSplitLines(h.lines || []);
   rows.forEach(pair => {
     const L = pair.left, R = pair.right;
@@ -806,7 +858,7 @@ function drawHunkSplit(h, table, f, lang, ins) {
     const tr = document.createElement("tr");
     const lClass = L ? (L.type === "del" ? "del" : "context") : "empty";
     const rClass = R ? (R.type === "add" ? "add" : "context") : "empty";
-    tr.className = "split-line";
+    tr.className = "split-line" + (ctx ? " hunk-context" : "");
     tr.innerHTML =
       "<td class='ln " + lClass + "'>" + (L && L.oldLine != null ? L.oldLine : "") + "</td>" +
       "<td class='code " + lClass + "'>" + (L ? "<span class='marker'>" +

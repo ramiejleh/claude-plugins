@@ -13,6 +13,8 @@ highlights, and annotates it — it never rewrites the code under review.
 
 ## Highlights
 
+- **PR overview** — a section at the top gives a concise, holistic summary of what the PR
+  achieves in plain terms, so you get the big picture before reading a single diff.
 - **Sidebar layout** — the review summary, action selector, export button, and a
   clickable group navigator live in a sticky sidebar, leaving the full width for the diff.
 - **IDE-style syntax highlighting** — diffs are colored with a vendored copy of
@@ -23,9 +25,9 @@ highlights, and annotates it — it never rewrites the code under review.
   descriptive — it never judges the code).
 - **"Things worth confirming"** — each group lists a few concrete things to focus on, so
   evaluative guidance is separated from the neutral descriptions.
-- **Per-group file manifest** — each group opens with a list of its files and each file's
-  role in that grouping (linking down to the diff), so you can trace how the files work
-  together before diving in.
+- **Per-group file manifest** — each group opens with a two-column table (file, role)
+  linking down to each file's diff, so you can trace how the files work together before
+  diving in — aligned columns regardless of how long any path or role is.
 - **Two diff views** — switch between **Unified** (inline) and **Split** (old / new side
   by side) from the sidebar.
 - **Expandable context** — "⋯ expand" affordances around each hunk reveal the surrounding
@@ -47,8 +49,10 @@ highlights, and annotates it — it never rewrites the code under review.
   requests changes.
 - **Deterministic UI** — the HTML structure is fixed; only the injected data differs, so
   every review page looks and behaves the same.
-- **Files spanning concerns appear in each relevant group**, carrying only that group's
-  hunks (grouping is by hunk, not by file).
+- **Files spanning concerns appear in each relevant group, with their full diff every
+  time** — a helper touched by several concerns is shown complete in each group it belongs
+  to (never chunked away), and a focus note names which lines are that group's concern while
+  the rest of the file's diff stays visible for context.
 
 ## Requirements
 
@@ -135,9 +139,9 @@ moved):
    SHA via `gh`.
 2. **Group** — the diff is split into logical chunks (feature, tests, config,
    incidental changes…), each with a neutral reasoning line, a "Things worth confirming"
-   list, per-file descriptions, and inline insight bubbles. Claude writes this analysis
-   layer directly to a temp file — no code, only references to the parsed hunks — keeping
-   your main context clean.
+   list, per-file descriptions, and inline insight bubbles, plus a holistic **overview** of
+   what the whole PR achieves. Claude writes this analysis layer directly to a temp file —
+   no code, only references to the parsed hunks — keeping your main context clean.
 3. **Review** — Claude generates and opens a self-contained HTML UI at
    `/tmp/pr-<number>-review.html`: a sidebar (summary, one-click export, insights toggle,
    group nav) beside collapsible groups, each file syntax-highlighted with a rich header,
@@ -171,13 +175,14 @@ Nothing is ever posted to GitHub without your explicit confirmation.
 Earlier versions had the model regenerate the entire diff as JSON — slow, expensive,
 prone to dropping on large PRs, and the one place the "diff is sacred" rule could break.
 Now a Python script (`parse_diff.py`) parses the diff into byte-exact hunks with stable
-`hunkId`s; Claude (in the main chat) emits **only the analysis** (titles, neutral
-descriptions, "things worth confirming", insights, and which `hunkId`s belong to each
-group); and `merge_analysis.py` joins them, embeds full file contents, and enforces
-invariants (every referenced hunk exists; **every changed file is always shown** — anything
-the analysis didn't place is swept into an "Other changes" group, and the merge fails rather
-than hide a file). The model never emits a line of code, so it can't alter one — nor drop
-one — and its output is a small fraction of the diff's size.
+`hunkId`s; Claude (in the main chat) emits **only the analysis** (an overview, titles,
+neutral descriptions, "things worth confirming", insights, and which `hunkId`s are each
+group's concern); and `merge_analysis.py` joins them, embeds full file contents, and
+enforces invariants (every referenced hunk exists; **every changed file is always shown** —
+anything the analysis didn't place is swept into an "Other changes" group, and the merge
+fails rather than hide a file; a file appearing in several groups carries its **full diff**
+in each). The model never emits a line of code, so it can't alter one — nor drop one — and
+its output is a small fraction of the diff's size.
 
 ## How comments are anchored
 
