@@ -37,12 +37,6 @@ To pick up a newer version after one is published:
 /plugin install interactive-pr-review@ramiejleh-plugins
 ```
 
-## Access
-
-This repository is **private**. To install, the GitHub account your `gh` / Claude Code is
-authenticated as must have **read** access to it — ask the maintainer to add you as a
-collaborator (or via a team).
-
 ## Repository structure
 
 ```

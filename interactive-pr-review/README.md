@@ -82,8 +82,7 @@ installs the plugin from it:
 ```
 
 `gh` must be installed and authenticated (`gh auth login`) — the plugin checks this on
-session start. If the marketplace repo is private, teammates also need read access to it
-through the same GitHub account `gh` is authenticated as.
+session start.
 
 To pick up a newer version after the maintainer publishes one:
 
