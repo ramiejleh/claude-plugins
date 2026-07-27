@@ -213,7 +213,6 @@ interactive-pr-review/
 ├── hooks/
 │   ├── hooks.json                 # SessionStart hook registration
 │   └── check-gh-auth.sh           # gh install + auth check
-├── CODEOWNERS
 └── README.md
 ```
 
