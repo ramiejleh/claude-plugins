@@ -195,25 +195,28 @@ clicked. Only lines present in the diff can be commented on.
 
 ## Development
 
-The plugin structure:
+The repository structure (this repo is the marketplace):
 
 ```
-interactive-pr-review/
-├── .claude-plugin/plugin.json     # manifest
-├── commands/review.md             # /interactive-pr-review:review
-├── commands/reopen.md             # /interactive-pr-review:reopen  (from cache, fresh-only)
-├── commands/list.md               # /interactive-pr-review:list    (cached PRs + freshness)
-├── commands/cleanup.md            # /interactive-pr-review:cleanup (remove artifacts)
-├── skills/pr-review-ui/
-│   ├── SKILL.md                   # parse / analyze / merge / UI / post procedures
-│   ├── scripts/
-│   │   ├── parse_diff.py          # diff → canonical hunks (deterministic)
-│   │   └── merge_analysis.py      # analysis + hunks → final groups JSON
-│   └── assets/review-template.html# the review UI template
-├── hooks/
-│   ├── hooks.json                 # SessionStart hook registration
-│   └── check-gh-auth.sh           # gh install + auth check
-└── README.md
+.
+├── .claude-plugin/marketplace.json   # marketplace listing
+├── .github/CODEOWNERS                # review owners
+├── README.md                         # this file
+└── interactive-pr-review/            # the plugin
+    ├── .claude-plugin/plugin.json    # manifest
+    ├── commands/review.md            # /interactive-pr-review:review
+    ├── commands/reopen.md            # /interactive-pr-review:reopen  (from cache, fresh-only)
+    ├── commands/list.md              # /interactive-pr-review:list    (cached PRs + freshness)
+    ├── commands/cleanup.md           # /interactive-pr-review:cleanup (remove artifacts)
+    ├── skills/pr-review-ui/
+    │   ├── SKILL.md                  # parse / analyze / merge / UI / post procedures
+    │   ├── scripts/
+    │   │   ├── parse_diff.py         # diff → canonical hunks (deterministic)
+    │   │   └── merge_analysis.py     # analysis + hunks → final groups JSON
+    │   └── assets/review-template.html # the review UI template
+    └── hooks/
+        ├── hooks.json                # SessionStart hook registration
+        └── check-gh-auth.sh          # gh install + auth check
 ```
 
 ## License
