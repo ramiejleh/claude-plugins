@@ -434,19 +434,8 @@
       <div class="stats" id="pr-stats"></div>
     </div>
 
-    <!-- Navigate: jump around the diff by file or by group. -->
-    <details class="sb-section" id="sec-files" open>
-      <summary class="section-label">Files changed <span class="count-pill" id="file-count">0</span></summary>
-      <nav class="filetree" id="filetree"></nav>
-    </details>
-
-    <details class="sb-section" id="sec-groups" open>
-      <summary class="section-label">Groups</summary>
-      <nav class="toc" id="toc"></nav>
-    </details>
-
     <!-- View: how the diff is displayed. -->
-    <section class="sep">
+    <section>
       <span class="section-label">Diff view</span>
       <select id="view-mode">
         <option value="unified">Unified (inline)</option>
@@ -490,6 +479,17 @@
         in one JSON. Paste it back into Claude to post them to GitHub as review
         comments.</span>
     </section>
+
+    <!-- Navigate: jump around the diff by file or by group. -->
+    <details class="sb-section sep" id="sec-files" open>
+      <summary class="section-label">Files changed <span class="count-pill" id="file-count">0</span></summary>
+      <nav class="filetree" id="filetree"></nav>
+    </details>
+
+    <details class="sb-section" id="sec-groups" open>
+      <summary class="section-label">Groups</summary>
+      <nav class="toc" id="toc"></nav>
+    </details>
   </aside>
 
   <main id="groups"></main>
