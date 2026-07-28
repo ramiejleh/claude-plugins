@@ -181,6 +181,14 @@
   .group[open] > summary::before { transform: rotate(90deg); }
   .group summary .title { font-weight: 600; font-size: 15px; }
   .group summary .count { color: var(--muted); font-size: 12px; margin-left: auto; }
+  /* Reviewed-progress pill on a group header: how many of its files are checked off. */
+  .group summary .progress {
+    color: var(--muted); font-size: 11px; font-weight: 700; padding: 2px 8px;
+    border: 1px solid var(--border); border-radius: 999px; white-space: nowrap;
+  }
+  .group summary .progress.done {
+    color: var(--status-added); border-color: var(--status-added);
+  }
   .reasoning {
     padding: 0 16px 14px 42px; color: var(--muted);
     border-bottom: 1px solid var(--border);
@@ -241,6 +249,19 @@
     flex-direction: column; gap: 6px; border-bottom: 1px solid var(--border);
   }
   .file-header .top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  /* Reviewed checkbox: the reviewer's own progress marker, per file. Local to this page —
+     never part of the exported comments. */
+  .reviewed-box {
+    margin-left: auto; display: flex; align-items: center; gap: 6px; cursor: pointer;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
+    color: var(--muted); user-select: none; white-space: nowrap;
+  }
+  .reviewed-box input { cursor: pointer; margin: 0; }
+  .reviewed-box:hover { color: var(--text); }
+  .file.reviewed .reviewed-box { color: var(--status-added); }
+  /* A reviewed file dims its diff so unreviewed work stands out; hover restores it. */
+  .file.reviewed .file-body { opacity: .45; transition: opacity .15s; }
+  .file.reviewed .file-body:hover { opacity: 1; }
   .file-path {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
     font-weight: 600; word-break: break-all;
@@ -511,6 +532,15 @@ const HAS_HLJS = typeof hljs !== "undefined";
 const lineComments = new Map();
 const fileComments = new Map();
 
+// Files the reviewer has ticked off as reviewed, keyed by path. Progress tracking only —
+// local to this page and never exported. Keyed by path (not per group) so a file appearing
+// in several groups stays in sync everywhere it's shown.
+const reviewedFiles = new Set();
+// Per-file DOM registry: path -> [{ wrap, input }], so one tick updates every copy.
+const reviewedNodes = new Map();
+// Per-group progress updaters, run whenever any checkbox changes.
+const groupProgress = [];
+
 // Count of AI insight bubbles rendered (read-only; not part of the review).
 let insightCount = 0;
 // Count of groups carrying a "things worth confirming" list (advisory; not part of the review).
@@ -580,6 +610,8 @@ function render() {
   toc.innerHTML = "";
   root.innerHTML = "";
   fileBodies.length = 0;
+  reviewedNodes.clear();
+  groupProgress.length = 0;
 
   // Overview: holistic summary of what the PR achieves, above the groups.
   if (DATA.overview && String(DATA.overview).trim()) {
@@ -650,12 +682,25 @@ function render() {
 
     details.innerHTML =
       "<summary><span class='title'>" + esc(g.title) + "</span>" +
-      "<span class='count'>" + fileCount + " file(s)</span></summary>" +
+      "<span class='count'>" + fileCount + " file(s)</span>" +
+      "<span class='progress' title='Files marked reviewed in this group'></span></summary>" +
       (g.reasoning ? "<div class='reasoning'>" + esc(g.reasoning) + "</div>" : "") +
       confirm + manifest;
 
     files.forEach((f, fi) => details.appendChild(renderFile(f, fileId(fi))));
     root.appendChild(details);
+
+    // Reviewed-progress indicator for this group. Counts distinct paths, so a file listed
+    // twice in one group isn't double-counted.
+    const groupPaths = [...new Set(files.map(f => f.path))];
+    const pill = details.querySelector("summary .progress");
+    const updateProgress = () => {
+      const done = groupPaths.filter(p => reviewedFiles.has(p)).length;
+      pill.textContent = done + "/" + groupPaths.length + " reviewed";
+      pill.classList.toggle("done", groupPaths.length > 0 && done === groupPaths.length);
+    };
+    groupProgress.push(updateProgress);
+    updateProgress();
   });
   updateCount();
   buildFileTree(fileNav);
@@ -799,6 +844,8 @@ function renderFile(f, domId) {
     "<div class='top'>" +
       "<span class='file-status " + sc + "'>" + esc(f.status || "modified") + "</span>" +
       "<span class='file-path'>" + rename + esc(f.path) + "</span>" +
+      "<label class='reviewed-box' title='Mark this file as reviewed'>" +
+        "<input type='checkbox' class='reviewed-input' />Reviewed</label>" +
     "</div>" +
     (meta.length ? "<div class='file-meta'>" + meta.join("") + "</div>" : "") +
     (f.description ? "<div class='file-desc'>" + esc(f.description) + "</div>" : "") +
@@ -815,6 +862,17 @@ function renderFile(f, domId) {
   wrap.appendChild(fileCommentSlot);
   header.querySelector(".file-comment-btn")
     .addEventListener("click", () => openFileComment(f.path, fileCommentSlot, header));
+
+  // Reviewed checkbox. Registered by path so ticking one copy of a multi-group file
+  // updates the others, then every group's X/Y indicator is refreshed.
+  const reviewedInput = header.querySelector(".reviewed-input");
+  if (!reviewedNodes.has(f.path)) reviewedNodes.set(f.path, []);
+  reviewedNodes.get(f.path).push({ wrap, input: reviewedInput });
+  reviewedInput.checked = reviewedFiles.has(f.path);
+  wrap.classList.toggle("reviewed", reviewedFiles.has(f.path));
+  reviewedInput.addEventListener("change", () => {
+    setReviewed(f.path, reviewedInput.checked);
+  });
 
   // The diff/file body lives in its own container that we can fully re-render
   // (on comment change or view-mode switch) without touching the header.
@@ -1219,6 +1277,19 @@ function setFileBtn(header, has) {
 function updateCount() {
   document.getElementById("comment-count").textContent =
     lineComments.size + fileComments.size;
+}
+
+/**
+ * Mark a file reviewed (or not) and sync every rendered copy of it plus all group
+ * progress indicators. Progress state only — never exported with the comments.
+ */
+function setReviewed(path, checked) {
+  if (checked) { reviewedFiles.add(path); } else { reviewedFiles.delete(path); }
+  (reviewedNodes.get(path) || []).forEach(({ wrap, input }) => {
+    input.checked = checked;
+    wrap.classList.toggle("reviewed", checked);
+  });
+  groupProgress.forEach(fn => fn());
 }
 
 function flash(msg) {

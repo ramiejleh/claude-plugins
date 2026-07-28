@@ -479,10 +479,10 @@ Only lines present in the diff can be commented on. Multi-line comments also sen
 The UI is `assets/review-template.html`. Its structure is **fixed** — every generated
 page looks the same and only the injected data differs. It provides:
 
-- A **sticky sidebar** with PR title/stats, organized into three clusters: **Navigate**
-  (a collapsible **Files changed** tree and a collapsible **Groups** table-of-contents),
-  **View** (the Diff view selector, insights toggle, things-to-confirm toggle), and
-  **Review** (the summary box and the one-click "Copy all comments as JSON" button). The
+- A **sticky sidebar** with PR title/stats, organized into three clusters: **View** (the
+  Diff view selector, insights toggle, things-to-confirm toggle), **Review** (the summary
+  box and the one-click "Copy all comments as JSON" button), and **Navigate**
+  (a collapsible **Files changed** tree and a collapsible **Groups** table-of-contents). The
   Files changed tree is a true nested hierarchy — one foldable level per directory segment,
   indented further at each depth — with every changed file as a clickable leaf (for a file
   spanning groups, its first occurrence); clicking one scrolls to that file and unfolds its
@@ -490,11 +490,19 @@ page looks the same and only the injected data differs. It provides:
   approve/request-changes action — this is a comments-only tool.)
 - A top **overview card** (from the top-level `overview`) summarizing what the whole PR
   achieves, shown above the groups. Omitted when `overview` is empty.
-- A main column of collapsible **groups**, each with a neutral reasoning line, a
+- A main column of collapsible **groups**, each with a neutral reasoning line, an
+  **X/Y reviewed** progress pill on the header, a
   "Things worth confirming" list (hidden by the sidebar toggle, like the insights), and a
   **file manifest table** (File | Role, linking down to each file's diff) so the reviewer
   can trace how the files fit together.
-- Per **file**: a rich header (status pill, path + rename arrow, language, +/− counts),
+- **Reviewed progress tracking**: each file header has a **Reviewed** checkbox the reviewer
+  ticks as they work through the diff. Ticking dims that file's body (hover restores it) and
+  advances the **X/Y reviewed** pill on its group's header, which highlights green once every
+  file in the group is checked. State is keyed by **path**, so a file appearing in several
+  groups stays in sync everywhere it's shown, and each group counts its own distinct files.
+  This is the reviewer's local progress only — it is never part of the exported comment JSON.
+- Per **file**: a rich header (status pill, path + rename arrow, language, +/− counts,
+  Reviewed checkbox),
   the AI `description`, an optional **focus note** (when the file spans groups: which lines
   are this group's concern), a "Comment on this file" button, and an IDE-syntax-highlighted
   diff (via vendored highlight.js) with GitHub-style add/remove backgrounds and dual

@@ -112,13 +112,17 @@ the fixed template, the vendored `highlight.min.js` and `hljs-github-theme.css`,
 Then open it (`open /tmp/pr-$1-review.html` on macOS).
 
 Tell the user the page has: a top **overview card** summarizing what the whole PR achieves,
-a **sidebar** organized into Navigate (a foldable, nested **Files changed** tree that scrolls
-to any file — unfolding its group if collapsed — and a foldable **Groups** nav), View (a
-**Diff view** selector — Unified / Split, an insights show/hide toggle, a things-to-confirm
-show/hide toggle), and Review (summary + one-click export button), collapsible
+a **sidebar** organized into View (a **Diff view** selector — Unified / Split, an insights
+show/hide toggle, a things-to-confirm show/hide toggle), Review (summary + one-click export
+button), and Navigate (a foldable, nested **Files changed** tree that scrolls to any file —
+unfolding its group if collapsed — and a foldable **Groups** nav), collapsible
 **groups** with reasoning, a "Things worth confirming" list (which the toggle hides), and a
 file manifest **table** (File | Role, linking to each file's
-diff), and per **file** a rich header + neutral description + IDE-highlighted diff. A file
+diff), and per **file** a rich header + neutral description + IDE-highlighted diff. Each
+file header carries a **Reviewed** checkbox for tracking progress — ticking it dims that
+file's diff (hover to restore) and advances an **X/Y reviewed** counter on its group's
+header, which turns green at 100%; a file appearing in several groups stays in sync across
+all of them. Reviewed state is local progress tracking and is never part of the export. A file
 that appears in several groups shows its **full diff** in each, with the hunks that aren't
 this group's concern dimmed and a focus note naming the relevant lines. Around each hunk,
 "⋯ expand context" reveals the surrounding real file lines on demand. Inline 💡 **insight
