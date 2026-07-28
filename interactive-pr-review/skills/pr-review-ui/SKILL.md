@@ -496,13 +496,19 @@ page looks the same and only the injected data differs. It provides:
   **file manifest table** (File | Role, linking down to each file's diff) so the reviewer
   can trace how the files fit together.
 - **Reviewed progress tracking**: each file header has a **Reviewed** checkbox the reviewer
-  ticks as they work through the diff. Ticking dims that file's body (hover restores it) and
-  advances the **X/Y reviewed** pill on its group's header, which highlights green once every
+  ticks as they work through the diff. Ticking **folds that file's diff away** and advances
+  the **X/Y reviewed** pill on its group's header, which highlights green once every
   file in the group is checked. State is keyed by **path**, so a file appearing in several
   groups stays in sync everywhere it's shown, and each group counts its own distinct files.
   This is the reviewer's local progress only — it is never part of the exported comment JSON.
-- Per **file**: a rich header (status pill, path + rename arrow, language, +/− counts,
-  Reviewed checkbox),
+- **Folding**: a caret (`▾`/`▸`) at the start of every file header folds or unfolds that
+  file's diff independently of the Reviewed checkbox — a reviewed file can be re-opened
+  without unticking it, and an unreviewed file can be collapsed out of the way. Folded state
+  is also keyed by path and synced across a file's copies, and navigating to a folded file
+  from the **Files changed** tree unfolds it automatically. A saved file-level comment stays
+  visible while the file is folded.
+- Per **file**: a rich header (fold caret, status pill, path + rename arrow, language,
+  +/− counts, Reviewed checkbox),
   the AI `description`, an optional **focus note** (when the file spans groups: which lines
   are this group's concern), a "Comment on this file" button, and an IDE-syntax-highlighted
   diff (via vendored highlight.js) with GitHub-style add/remove backgrounds and dual

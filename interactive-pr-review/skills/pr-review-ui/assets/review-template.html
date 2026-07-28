@@ -259,9 +259,16 @@
   .reviewed-box input { cursor: pointer; margin: 0; }
   .reviewed-box:hover { color: var(--text); }
   .file.reviewed .reviewed-box { color: var(--status-added); }
-  /* A reviewed file dims its diff so unreviewed work stands out; hover restores it. */
-  .file.reviewed .file-body { opacity: .45; transition: opacity .15s; }
-  .file.reviewed .file-body:hover { opacity: 1; }
+  /* Fold caret: collapses a file's diff. Ticking Reviewed folds the file automatically;
+     this button folds/unfolds any file independently of its reviewed state. */
+  .fold-btn {
+    background: none; border: none; padding: 0; cursor: pointer; color: var(--muted);
+    font-size: 10px; line-height: 1; flex: 0 0 auto; width: 12px; text-align: left;
+  }
+  .fold-btn:hover { color: var(--text); }
+  .file.collapsed .file-body { display: none; }
+  /* Collapsed: the header is the whole block, so it owns no bottom divider. */
+  .file.collapsed .file-header { border-bottom: none; }
   .file-path {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
     font-weight: 600; word-break: break-all;
@@ -536,7 +543,11 @@ const fileComments = new Map();
 // local to this page and never exported. Keyed by path (not per group) so a file appearing
 // in several groups stays in sync everywhere it's shown.
 const reviewedFiles = new Set();
-// Per-file DOM registry: path -> [{ wrap, input }], so one tick updates every copy.
+// Files whose diff is folded away, keyed by path. Ticking Reviewed folds a file; the header
+// caret folds/unfolds any file independently. Presentation only — never exported.
+const collapsedFiles = new Set();
+// Per-file DOM registry: path -> [{ wrap, input, fold }], so one tick or fold updates every
+// rendered copy of that file.
 const reviewedNodes = new Map();
 // Per-group progress updaters, run whenever any checkbox changes.
 const groupProgress = [];
@@ -612,6 +623,7 @@ function render() {
   fileBodies.length = 0;
   reviewedNodes.clear();
   groupProgress.length = 0;
+  collapsedFiles.clear();
 
   // Overview: holistic summary of what the PR achieves, above the groups.
   if (DATA.overview && String(DATA.overview).trim()) {
@@ -784,6 +796,8 @@ function jumpToFile(gid, domId) {
   if (group && group.tagName === "DETAILS") group.open = true;
   const el = document.getElementById(domId);
   if (!el) return;
+  // Unfold the file if it was collapsed, so the jump always lands on a visible diff.
+  if (el.dataset.path && collapsedFiles.has(el.dataset.path)) setCollapsed(el.dataset.path, false);
   el.scrollIntoView({ behavior: "smooth", block: "start" });
   el.classList.remove("ft-jumped");
   void el.offsetWidth;            // restart the animation if the same file is re-clicked
@@ -828,6 +842,7 @@ function renderFile(f, domId) {
   const wrap = document.createElement("div");
   wrap.className = "file";
   if (domId) wrap.id = domId;
+  wrap.dataset.path = f.path;
   const sc = statusClass(f.status);
   const lang = hlLang(f);
 
@@ -842,6 +857,7 @@ function renderFile(f, domId) {
   if (f.deletions != null) meta.push("<span class='stat del'>−" + esc(f.deletions) + "</span>");
   header.innerHTML =
     "<div class='top'>" +
+      "<button class='fold-btn' type='button' title='Fold/unfold this file'>▾</button>" +
       "<span class='file-status " + sc + "'>" + esc(f.status || "modified") + "</span>" +
       "<span class='file-path'>" + rename + esc(f.path) + "</span>" +
       "<label class='reviewed-box' title='Mark this file as reviewed'>" +
@@ -863,16 +879,22 @@ function renderFile(f, domId) {
   header.querySelector(".file-comment-btn")
     .addEventListener("click", () => openFileComment(f.path, fileCommentSlot, header));
 
-  // Reviewed checkbox. Registered by path so ticking one copy of a multi-group file
-  // updates the others, then every group's X/Y indicator is refreshed.
+  // Reviewed checkbox + fold caret. Registered by path so ticking or folding one copy of a
+  // multi-group file updates the others, then every group's X/Y indicator is refreshed.
   const reviewedInput = header.querySelector(".reviewed-input");
+  const foldBtn = header.querySelector(".fold-btn");
   if (!reviewedNodes.has(f.path)) reviewedNodes.set(f.path, []);
-  reviewedNodes.get(f.path).push({ wrap, input: reviewedInput });
+  reviewedNodes.get(f.path).push({ wrap, input: reviewedInput, fold: foldBtn });
   reviewedInput.checked = reviewedFiles.has(f.path);
   wrap.classList.toggle("reviewed", reviewedFiles.has(f.path));
+  applyCollapsed(wrap, foldBtn, collapsedFiles.has(f.path));
+  // Ticking Reviewed folds the file away; unticking brings it back.
   reviewedInput.addEventListener("change", () => {
     setReviewed(f.path, reviewedInput.checked);
+    setCollapsed(f.path, reviewedInput.checked);
   });
+  // Manual fold works independently of reviewed state.
+  foldBtn.addEventListener("click", () => setCollapsed(f.path, !collapsedFiles.has(f.path)));
 
   // The diff/file body lives in its own container that we can fully re-render
   // (on comment change or view-mode switch) without touching the header.
@@ -1290,6 +1312,24 @@ function setReviewed(path, checked) {
     wrap.classList.toggle("reviewed", checked);
   });
   groupProgress.forEach(fn => fn());
+}
+
+/** Set a single rendered file's folded appearance (class + caret glyph). */
+function applyCollapsed(wrap, foldBtn, collapsed) {
+  wrap.classList.toggle("collapsed", collapsed);
+  foldBtn.textContent = collapsed ? "▸" : "▾";
+  foldBtn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+}
+
+/**
+ * Fold or unfold a file's diff across every rendered copy of it. Ticking Reviewed calls
+ * this to fold automatically; the header caret calls it directly, so a reviewed file can
+ * still be unfolded (and an unreviewed one folded) by hand.
+ */
+function setCollapsed(path, collapsed) {
+  if (collapsed) { collapsedFiles.add(path); } else { collapsedFiles.delete(path); }
+  (reviewedNodes.get(path) || []).forEach(({ wrap, fold }) =>
+    applyCollapsed(wrap, fold, collapsed));
 }
 
 function flash(msg) {
