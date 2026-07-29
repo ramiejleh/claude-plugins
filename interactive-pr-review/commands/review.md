@@ -132,7 +132,8 @@ subtitles** sit above each
 logical block (function, interface, const group, component, conditional, test…),
 describing what it is/does/takes/is-used-for — like explanatory comments over the file;
 toggle them off for a bare diff. They can comment at three levels —
-click a line (including expanded context lines), "Comment on this file", or the overall
+click a line (including expanded context lines) or **drag across several lines to comment on
+that whole range**, "Comment on this file", or the overall
 summary — then click **Copy all comments as JSON** (one click captures summary + line +
 file comments together) and paste it back. This is a comments-only tool: there is no
 approve or
@@ -143,8 +144,9 @@ request-changes. (Insight bubbles are just guidance; they're never part of the e
 When the user pastes the JSON:
 
 1. Parse and validate (schema in the skill; `summary`, `comments[]`, `fileComments[]` —
-   no `action`). Echo a concise summary: each line comment as `path:line — <first line>`,
-   each file comment as `path (file) — <first line>`. **Ask the user to confirm** before
+   no `action`). Echo a concise summary: each line comment as `path:line — <first line>`
+   (a multi-line one — it carries `start_line`/`start_side` — as
+   `path:start_line-line — <first line>`), each file comment as `path (file) — <first line>`. **Ask the user to confirm** before
    posting.
 2. On confirmation, submit **one** `COMMENT` review anchored to the head SHA. Line
    comments go in the review `comments[]`; fold `fileComments` into the review `body`

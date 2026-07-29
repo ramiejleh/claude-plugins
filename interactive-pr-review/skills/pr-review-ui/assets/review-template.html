@@ -16,6 +16,10 @@
   Everything else is fixed, so every generated page has the SAME structure and only
   the data differs. Do not hand-edit the markup per-PR.
 
+  Line comments cover a RANGE: clicking a line comments on it alone, dragging across lines
+  comments on the whole span. A comment is keyed and anchored by its LAST line (what GitHub
+  anchors to) and carries `startLine`; the export adds start_line/start_side when they differ.
+
   Each file in the data may carry an insights[] array: read-only 💡 bubbles that
   explain the code (function purpose, non-obvious logic, gotchas). They render under
   their anchored diff line, are toggled from the sidebar, and are NEVER included in the
@@ -35,6 +39,7 @@
     --status-renamed: #a371f7;
     --insight-bg: #1a1726; --insight-border: #8957e5; --insight-text: #d2c5f1;
     --insight-accent: #a371f7; --insight-scope-tint: rgba(163,113,247,.08);
+    --range-tint: rgba(47,129,247,.3);
   }
   @media (prefers-color-scheme: light) {
     :root {
@@ -47,6 +52,7 @@
       --status-renamed: #8250df;
       --insight-bg: #faf5ff; --insight-border: #8250df; --insight-text: #4c2889;
       --insight-accent: #8250df; --insight-scope-tint: rgba(130,80,223,.07);
+      --range-tint: rgba(9,105,218,.22);
     }
   }
   * { box-sizing: border-box; }
@@ -338,6 +344,20 @@
   tr.del .marker { color: var(--del-text); }
   tr.commentable td.code:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
   tr.commentable.selected td.code { outline: 2px solid var(--accent); outline-offset: -2px; }
+  /* Multi-line range: every line between the drag anchor and the current line is tinted,
+     and the range's first/last lines carry the accent edge so the span reads as one block. */
+  /* The gutter is tinted with the code only in unified view — in split, a row spans both
+     sides and a range only ever covers one, so tinting the row's gutters would overreach. */
+  table.diff:not(.split) tr.in-range td.ln,
+  table.diff td.code.in-range { background-image: linear-gradient(var(--range-tint), var(--range-tint)); }
+  table.diff tr.range-start td.code.in-range { box-shadow: inset 0 2px 0 var(--accent); }
+  table.diff tr.range-end td.code.in-range { box-shadow: inset 0 -2px 0 var(--accent); }
+  table.diff tr.range-start.range-end td.code.in-range {
+    box-shadow: inset 0 2px 0 var(--accent), inset 0 -2px 0 var(--accent);
+  }
+  /* While dragging, suppress the browser's text selection so the drag reads as line picking. */
+  body.range-dragging { user-select: none; }
+  body.range-dragging table.diff tr.commentable td.code:hover { outline: none; }
   /* Context hunks: a file shown in a group it only partly belongs to still shows its WHOLE
      diff; the hunks that aren't this group's concern are dimmed (still fully commentable). */
   table.diff tr.hunk-context td { opacity: .5; }
@@ -351,6 +371,11 @@
   table.diff tr.insight-scope td.ln:first-child {
     box-shadow: inset 2px 0 0 var(--insight-accent);
   }
+
+  /* Lines covered by a saved multi-line comment: an accent rail down the code cell, so the
+     span a comment applies to stays visible after the drag selection is released. */
+  /* 3px matches the comment box's left border, so rail and box read as one line. */
+  table.diff td.code.comment-scope { box-shadow: inset 3px 0 0 var(--accent); }
 
   /* Split (side-by-side) view: two ln|code column pairs. */
   table.diff.split td.code { width: 50%; }
@@ -376,7 +401,13 @@
   /* comment editor / saved (shared).
      Qualified with `table.diff` to out-specify `table.diff td { padding:0 10px }`. */
   table.diff tr.comment-row td,
-  table.diff tr.saved-row td { padding: 14px 16px 16px 36px; background: var(--bg); }
+  table.diff tr.saved-row td { padding: 0; background: var(--bg); }
+  /* No left padding: the box's left border lands flush on the code column's edge so it
+     continues the commented lines' rail. On a saved comment the cell carries the rail too,
+     bridging the row's own padding into one unbroken vertical line. */
+  table.diff tr.comment-row td.cbody,
+  table.diff tr.saved-row td.cbody { padding: 14px 16px 16px 0; }
+  table.diff tr.saved-row td.cbody { box-shadow: inset 3px 0 0 var(--accent); }
   .comment-box { display: flex; flex-direction: column; gap: 8px; }
   .comment-box .loc, .file-comment .loc { color: var(--muted); font-size: 11px; }
   .comment-box textarea, .file-comment textarea {
@@ -385,6 +416,11 @@
     font-family: inherit; font-size: 13px; resize: vertical;
   }
   .comment-box .row, .file-comment .row { display: flex; gap: 8px; align-items: center; }
+  /* The editor carries the same accent rail as a saved comment, so the range's rail stays
+     unbroken while you type. Scoped to the diff table — file comments keep their own look. */
+  table.diff tr.comment-row .comment-box {
+    border-left: 3px solid var(--accent); padding: 2px 0 2px 12px;
+  }
   .saved-comment {
     background: var(--panel); border-left: 3px solid var(--accent);
     padding: 8px 12px; border-radius: 0 6px 6px 0; white-space: pre-wrap; cursor: pointer;
@@ -429,7 +465,11 @@
     color: var(--muted); margin-right: 6px; white-space: nowrap; font-style: normal;
   }
   body.hide-insights tr.insight-row { display: none; }
-  body.hide-insights tr.insight-scope td.code { box-shadow: none; background-image: none; }
+  /* `:not(.comment-scope)` keeps a comment range's rail intact on lines that also sit
+     inside an insight — otherwise hiding insights breaks the rail mid-range. */
+  body.hide-insights tr.insight-scope td.code:not(.comment-scope) {
+    box-shadow: none; background-image: none;
+  }
   .toggle-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
   .toggle-row input { width: auto; cursor: pointer; }
   .toggle-row label { cursor: pointer; color: var(--text); }
@@ -535,7 +575,9 @@ const DATA = /*__PR_REVIEW_DATA__*/ null;
 const HAS_HLJS = typeof hljs !== "undefined";
 
 // Comment stores.
-//  lineComments keyed by "path::side::line"; fileComments keyed by "path".
+//  lineComments keyed by "path::side::line" where `line` is the range's LAST line (the
+//  line GitHub anchors a comment to); each entry also carries `startLine` (equal to `line`
+//  for a single-line comment). fileComments keyed by "path".
 const lineComments = new Map();
 const fileComments = new Map();
 
@@ -566,7 +608,15 @@ function esc(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
+// A comment is keyed by its LAST line — the line GitHub anchors it to; a range's start is
+// stored alongside, so a single-line and a multi-line comment ending on the same line are one.
 function lineKey(path, side, line) { return path + "::" + side + "::" + line; }
+
+// Human-readable location of a comment or selection.
+function locLabel(path, side, start, end) {
+  return esc(path) + " · " + side + (start === end
+    ? " line " + end : " lines " + start + "–" + end);
+}
 
 // Map a file language hint / extension to a highlight.js language name.
 function hlLang(file) {
@@ -934,6 +984,7 @@ function drawFileBody(f, body, lang) {
   const split = viewMode === "split";
   const table = document.createElement("table");
   table.className = "diff" + (split ? " split" : "");
+  table._path = f.path;
   const ins = fileInsights(f);
   const cols = split ? 4 : 3;
 
@@ -945,6 +996,7 @@ function drawFileBody(f, body, lang) {
   const firstNew = h => { for (const l of h.lines) if (l.newLine != null) return l.newLine; return null; };
   const lastNew  = h => { let v = null; for (const l of h.lines) if (l.newLine != null) v = l.newLine; return v; };
 
+  wireRangeSelection(table);
   hunks.forEach((h, hi) => {
     // Context gap before this hunk (from end of previous hunk to this hunk's start).
     if (fullLines) {
@@ -1057,12 +1109,11 @@ function appendContextLine(frag, f, table, lang, cols, n, text, ins) {
     tr.innerHTML =
       "<td class='ln'>" + n + "</td><td class='code'>" + cell + "</td>" +
       "<td class='ln'>" + n + "</td><td class='code'>" + cell + "</td>";
-    tr.children[3].classList.add("commentable");
-    tr.children[3].addEventListener("click", () => toggleLineEditor(table, tr, f.path, "RIGHT", n, cols));
+    markCommentable(tr.children[3], "RIGHT", n);
   } else {
     tr.innerHTML =
       "<td class='ln'></td><td class='ln'>" + n + "</td><td class='code'>" + cell + "</td>";
-    tr.querySelector("td.code").addEventListener("click", () => toggleLineEditor(table, tr, f.path, "RIGHT", n, cols));
+    markCommentable(tr.querySelector("td.code"), "RIGHT", n);
   }
   frag.appendChild(tr);
   const key = lineKey(f.path, "RIGHT", n);
@@ -1086,11 +1137,7 @@ function drawHunkUnified(h, table, f, lang, ins, ctx) {
       "<td class='ln'>" + (ln.newLine == null ? "" : ln.newLine) + "</td>" +
       "<td class='code'><span class='marker'>" + marker + "</span>" +
         highlight(ln.text, lang) + "</td>";
-    if (num != null) {
-      const path = f.path;
-      tr.querySelector("td.code").addEventListener("click",
-        () => toggleLineEditor(table, tr, path, side, num, 3));
-    }
+    if (num != null) markCommentable(tr.querySelector("td.code"), side, num);
     table.appendChild(tr);
     if (num != null) {
       const key = lineKey(f.path, side, num);
@@ -1119,14 +1166,8 @@ function drawHunkSplit(h, table, f, lang, ins, ctx) {
       "<td class='ln " + rClass + "'>" + (R && R.newLine != null ? R.newLine : "") + "</td>" +
       "<td class='code " + rClass + "'>" + (R ? "<span class='marker'>" +
         (R.type === "add" ? "+" : " ") + "</span>" + highlight(R.text, lang) : "") + "</td>";
-    if (L && L.oldLine != null) {
-      tr.children[1].classList.add("commentable");
-      tr.children[1].addEventListener("click", () => toggleLineEditor(table, tr, f.path, "LEFT", L.oldLine, 4));
-    }
-    if (R && R.newLine != null) {
-      tr.children[3].classList.add("commentable");
-      tr.children[3].addEventListener("click", () => toggleLineEditor(table, tr, f.path, "RIGHT", R.newLine, 4));
-    }
+    if (L && L.oldLine != null) markCommentable(tr.children[1], "LEFT", L.oldLine);
+    if (R && R.newLine != null) markCommentable(tr.children[3], "RIGHT", R.newLine);
     table.appendChild(tr);
     [["LEFT", L && L.oldLine], ["RIGHT", R && R.newLine]].forEach(([sd, n]) => {
       if (n == null) return;
@@ -1174,33 +1215,129 @@ function insightRow(ins, cols) {
   return row;
 }
 
+/* ---------- line range selection (click = one line, drag = many) ---------- */
+
+// Tag a code cell as commentable and record which diff line it represents, so the
+// delegated range handlers on the table can resolve any cell to a (side, line) pair.
+function markCommentable(cell, side, line) {
+  if (!cell) return;
+  cell.classList.add("commentable");
+  cell.dataset.side = side;
+  cell.dataset.line = String(line);
+}
+
+// The drag in progress: {table, side, anchor, current} while the pointer is down.
+let dragSel = null;
+
+// Wire pointer-based range selection on one diff table. A press on a code cell starts a
+// selection; moving over cells on the SAME side extends it; release opens the editor for
+// the resulting range (a press-and-release on one line behaves exactly like the old click).
+function wireRangeSelection(table) {
+  table.addEventListener("pointerdown", (e) => {
+    const cell = e.target.closest("td.code.commentable");
+    if (!cell || !table.contains(cell) || e.button !== 0) return;
+    dragSel = { table, side: cell.dataset.side,
+      anchor: Number(cell.dataset.line), current: Number(cell.dataset.line) };
+  });
+  table.addEventListener("pointermove", (e) => {
+    if (!dragSel || dragSel.table !== table) return;
+    const cell = e.target.closest("td.code.commentable");
+    if (!cell || cell.dataset.side !== dragSel.side) return;
+    const line = Number(cell.dataset.line);
+    if (line === dragSel.current) return;
+    dragSel.current = line;
+    // Only once the drag leaves its anchor line do we take over from the browser's own text
+    // selection — so a press-and-drag within one line still selects text to copy.
+    document.body.classList.add("range-dragging");
+    window.getSelection()?.removeAllRanges();
+    paintRange(table);
+  });
+}
+
+// Paint the in-progress selection: tint every commentable cell inside the range.
+function paintRange(table) {
+  table.querySelectorAll("td.code.in-range").forEach(c => c.classList.remove("in-range"));
+  table.querySelectorAll("tr.in-range, tr.range-start, tr.range-end")
+    .forEach(r => r.classList.remove("in-range", "range-start", "range-end"));
+  if (!dragSel) return;
+  const lo = Math.min(dragSel.anchor, dragSel.current);
+  const hi = Math.max(dragSel.anchor, dragSel.current);
+  table.querySelectorAll("td.code.commentable").forEach(cell => {
+    if (cell.dataset.side !== dragSel.side) return;
+    const n = Number(cell.dataset.line);
+    if (n < lo || n > hi) return;
+    cell.classList.add("in-range");
+    cell.parentElement.classList.add("in-range");
+    if (n === lo) cell.parentElement.classList.add("range-start");
+    if (n === hi) cell.parentElement.classList.add("range-end");
+  });
+}
+
+// Release anywhere ends the drag; if it ended on a valid range, open the editor for it.
+document.addEventListener("pointerup", () => {
+  if (!dragSel) return;
+  const { table, side, anchor, current } = dragSel;
+  dragSel = null;
+  document.body.classList.remove("range-dragging");
+  paintRange(table);
+  const start = Math.min(anchor, current), end = Math.max(anchor, current);
+  const cols = table.classList.contains("split") ? 4 : 3;
+  const anchorTr = lineRow(table, side, end);
+  if (anchorTr) toggleLineEditor(table, anchorTr, table._path, side, start, end, cols);
+});
+
+// The <tr> whose commentable cell on `side` carries line `line`.
+function lineRow(table, side, line) {
+  const cell = [...table.querySelectorAll("td.code.commentable")]
+    .find(c => c.dataset.side === side && Number(c.dataset.line) === line);
+  return cell ? cell.parentElement : null;
+}
+
 /* ---------- line comments (slot-based, no sibling hunting) ---------- */
 
-// Open or close the inline editor for a line, inserted right after `anchorTr`.
-function toggleLineEditor(table, anchorTr, path, side, line, cols) {
+/**
+ * Leading cells + the opening <td> for a comment/editor row, offset so the body cell starts
+ * exactly at the commented side's code column — that way the box's left border continues the
+ * commented lines' rail instead of starting further left.
+ * Unified columns: ln|ln|code. Split: ln|code(LEFT)|ln|code(RIGHT).
+ */
+function commentRowCells(cols, side) {
+  if (cols !== 4) return "<td class='ln'></td><td class='ln'></td><td class='cbody'>";
+  return side === "LEFT"
+    ? "<td class='ln'></td><td class='cbody' colspan='3'>"
+    : "<td class='ln'></td><td></td><td class='ln'></td><td class='cbody'>";
+}
+
+// Open or close the inline editor for the line range [startLine,endLine], inserted right
+// after `anchorTr` (the range's last line). A single-line comment passes start === end.
+function toggleLineEditor(table, anchorTr, path, side, startLine, endLine, cols) {
+  const key = lineKey(path, side, endLine);
   const existingEditor = table.querySelector("tr.comment-row.editing");
-  // If an editor for THIS line is already open, treat the click as a cancel/toggle.
-  if (existingEditor && existingEditor._key === lineKey(path, side, line)) {
+  // If the editor for THIS exact range is already open, treat the interaction as a cancel.
+  if (existingEditor && existingEditor._key === key && existingEditor._start === startLine) {
     existingEditor.remove(); anchorTr.classList.remove("selected");
-    // re-show saved row if a comment exists
-    if (lineComments.has(lineKey(path, side, line))) redrawCurrentFile();
+    if (lineComments.has(key)) redrawCurrentFile();
     return;
   }
   if (existingEditor) { existingEditor.remove();
     table.querySelectorAll("tr.selected").forEach(t => t.classList.remove("selected")); }
 
-  const key = lineKey(path, side, line);
   // Remove any saved-row for this key while editing (we re-add on save/cancel via redraw).
   table.querySelectorAll("tr.saved-row").forEach(r => { if (r._key === key) r.remove(); });
 
+  // Re-opening a saved comment keeps its stored range unless this call selected a new one.
   const existing = lineComments.get(key);
+  const start = startLine, end = endLine;
   const row = document.createElement("tr");
   row.className = "comment-row editing";
   row._key = key;
+  row._start = start;
   row.innerHTML =
-    "<td colspan='" + cols + "'><div class='comment-box'>" +
-    "<div class='loc'>" + esc(path) + " · " + side + " line " + line + "</div>" +
-    "<textarea placeholder='Leave a comment on this line…'>" +
+    commentRowCells(cols, side) + "<div class='comment-box'>" +
+    "<div class='loc'>" + locLabel(path, side, start, end) + "</div>" +
+    "<textarea placeholder='" + (start === end
+      ? "Leave a comment on this line…"
+      : "Leave a comment on these " + (end - start + 1) + " lines…") + "'>" +
       esc(existing ? existing.body : "") + "</textarea>" +
     "<div class='row'>" +
       "<button class='sm primary save'>Save comment</button>" +
@@ -1214,7 +1351,8 @@ function toggleLineEditor(table, anchorTr, path, side, line, cols) {
   row.querySelector(".save").addEventListener("click", () => {
     const bodyText = ta.value.trim();
     if (!bodyText) { flash("Comment is empty"); return; }
-    lineComments.set(key, { path, side, line: Number(line), body: bodyText });
+    lineComments.set(key, { path, side, line: Number(end), startLine: Number(start),
+      body: bodyText });
     redrawCurrentFile();
   });
   row.querySelector(".cancel").addEventListener("click", () => { redrawCurrentFile(); });
@@ -1222,20 +1360,28 @@ function toggleLineEditor(table, anchorTr, path, side, line, cols) {
   if (del) del.addEventListener("click", () => { lineComments.delete(key); redrawCurrentFile(); });
 }
 
-// A persistent saved-comment row (reconstructed from state on every redraw).
+// A persistent saved-comment row (reconstructed from state on every redraw). Also rails the
+// lines the comment spans, so a multi-line comment's extent stays visible.
 function savedLineRow(table, path, side, line, cols) {
   const c = lineComments.get(lineKey(path, side, line));
+  const start = c.startLine != null ? c.startLine : c.line;
+  for (let n = start; n <= c.line; n++) {
+    const tr = lineRow(table, side, n);
+    if (tr) tr.querySelectorAll("td.code.commentable").forEach(cell => {
+      if (cell.dataset.side === side) cell.classList.add("comment-scope");
+    });
+  }
   const row = document.createElement("tr");
   row.className = "saved-row";
   row._key = lineKey(path, side, line);
   row.innerHTML =
-    "<td colspan='" + cols + "'><div class='saved-comment'>" +
-    "<div class='loc'>" + esc(path) + " · " + side + " line " + line +
+    commentRowCells(cols, side) + "<div class='saved-comment'>" +
+    "<div class='loc'>" + locLabel(path, side, start, c.line) +
       " — click to edit</div>" + esc(c.body) + "</div></td>";
   row.querySelector(".saved-comment").addEventListener("click", () => {
-    // Re-open editor anchored to the line row just above this saved row.
+    // Re-open editor anchored to the line row just above this saved row, on its saved range.
     const anchor = row.previousElementSibling;
-    if (anchor) toggleLineEditor(table, anchor, path, side, line, cols);
+    if (anchor) toggleLineEditor(table, anchor, path, side, start, c.line, cols);
   });
   return row;
 }
@@ -1341,8 +1487,14 @@ function flash(msg) {
 document.getElementById("copy-btn").addEventListener("click", () => {
   const pr = (DATA && DATA.pr) || {};
   const comments = [];
-  lineComments.forEach(c =>
-    comments.push({ path: c.path, line: c.line, side: c.side, body: c.body }));
+  lineComments.forEach(c => {
+    const one = { path: c.path, line: c.line, side: c.side, body: c.body };
+    // Multi-line comments carry GitHub's start_line/start_side alongside the anchor line.
+    if (c.startLine != null && c.startLine !== c.line) {
+      one.start_line = c.startLine; one.start_side = c.side;
+    }
+    comments.push(one);
+  });
   const fileLevel = [];
   fileComments.forEach(c => fileLevel.push({ path: c.path, body: c.body }));
 

@@ -471,8 +471,9 @@ advance both; `del` advances only `oldLine`; `add` advances only `newLine`. GitH
 anchors a review comment by side + line:
 - `side: "RIGHT"` + `line: <newLine>` for added/context lines (the common case).
 - `side: "LEFT"` + `line: <oldLine>` for removed lines.
-Only lines present in the diff can be commented on. Multi-line comments also send
-`start_line` + `start_side`.
+Only lines present in the diff can be commented on. A comment spanning several lines also
+sends `start_line` + `start_side` (the range's first line) next to `line` + `side` (its last
+line, which is what GitHub anchors to); both ends must be on the same side.
 
 ## 3. The review UI template (fixed structure, self-contained)
 
@@ -526,9 +527,13 @@ page looks the same and only the injected data differs. It provides:
   block's first line**, labelled with the covered lines; `notable` insights render
   emphasized and `routine` ones dim/compact so the important ones stand out. A sidebar
   toggle hides them for a bare diff. They never enter the exported review.
-- **Three comment levels**: click a line to comment on it, click "Comment on this file"
-  for a file-level comment, and the sidebar summary for the overall review. Comments are
-  stored in state and re-rendered, so editing one never loses it.
+- **Three comment levels**: click a line to comment on it — or **press and drag across
+  several lines** to comment on that whole range (the dragged span tints as you go; a saved
+  multi-line comment keeps an accent rail down the lines it covers) — click "Comment on this
+  file" for a file-level comment, and the sidebar summary for the overall review. Comments
+  are stored in state and re-rendered, so editing one never loses it. A range is normalized
+  regardless of drag direction and must stay on one side (LEFT or RIGHT); a multi-line
+  comment exports `start_line`/`start_side` alongside its anchor `line`.
 
 The template has three placeholder tokens, each appearing exactly once:
 `/* __HLJS_LIB__ */`, `/* __HLJS_THEME__ */`, and `/*__PR_REVIEW_DATA__*/ null`.
@@ -598,7 +603,10 @@ every line comment, and every file comment together:
   "summary": "Overall thoughts, if any.",
   "comments": [
     { "path": "src/middleware/rateLimit.ts", "line": 22, "side": "RIGHT",
-      "body": "Does this refill run per-request?" }
+      "body": "Does this refill run per-request?" },
+    { "path": "src/middleware/rateLimit.ts", "line": 40, "side": "RIGHT",
+      "start_line": 34, "start_side": "RIGHT",
+      "body": "This whole block could move behind the guard above." }
   ],
   "fileComments": [
     { "path": "src/middleware/rateLimit.ts",
@@ -612,10 +620,12 @@ There is no `action` field. Every posted review is a plain `COMMENT` review.
 ## 6. Post comments back to GitHub (always a COMMENT review)
 
 1. **Validate** the pasted JSON: it parses, `pr` matches, every line comment has `path`,
-   `line`, `side`, non-empty `body`; every file comment has `path` + `body`.
+   `line`, `side`, non-empty `body`; every file comment has `path` + `body`. A multi-line
+   comment additionally carries `start_line` (≤ `line`) and `start_side` (equal to `side`) —
+   pass both straight through to GitHub.
 2. **Summarize and confirm.** Print line comments as `path:line — <first line of body>`
-   and file comments as `path (file) — <first line>`, and ask the user to confirm before
-   posting.
+   (a multi-line one as `path:start_line-line — …`) and file comments as
+   `path (file) — <first line>`, and ask the user to confirm before posting.
 3. **Post one COMMENT review** so everything lands together. Line comments become the
    review's `comments[]`. **File-level comments** have no diff line to anchor to — fold
    each into the review `body` under a "File notes" heading (prefixed with the path), or

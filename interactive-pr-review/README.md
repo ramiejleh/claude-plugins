@@ -46,6 +46,11 @@ highlights, and annotates it — it never rewrites the code under review.
 - **Three comment levels** — click a line, comment on a whole file, or write an overall
   review summary. **One click** copies all of them (summary + line + file comments)
   together as JSON.
+- **Multi-line comments** — drag across a run of lines to pin one comment to that whole
+  range instead of a single line. The span tints as you drag, and a saved range keeps an accent
+  rail running down the lines it covers and straight into the comment box's own left border, so
+  the range and its comment read as one block (it stays unbroken whether insight bubbles are
+  shown or hidden). It posts to GitHub as a real multi-line review comment.
 - **Comments only** — this tool exists to leave review comments. It never approves or
   requests changes.
 - **Deterministic UI** — the HTML structure is fixed; only the injected data differs, so
