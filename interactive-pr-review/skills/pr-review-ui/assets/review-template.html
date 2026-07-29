@@ -24,8 +24,10 @@
   the data differs. Do not hand-edit the markup per-PR.
 
   Line comments cover a RANGE: clicking a line comments on it alone, dragging across lines
-  comments on the whole span. A comment is keyed and anchored by its LAST line (what GitHub
-  anchors to) and carries `startLine`; the export adds start_line/start_side when they differ.
+  comments on the whole span. The span stays tinted while its editor is open, and on save the
+  tint gives way to the saved comment's rail. A comment is keyed and anchored by its LAST line
+  (what GitHub anchors to) and carries `startLine`; the export adds start_line/start_side when
+  they differ.
 
   Each file in the data may carry an insights[] array: read-only 💡 bubbles that
   explain the code (function purpose, non-obvious logic, gotchas). They render under
@@ -42,72 +44,69 @@
 <body>
 <div class="layout">
   <aside class="sidebar">
-    <div>
-      <h1 id="pr-title">PR Review</h1>
-      <div class="pr-sub" id="pr-sub"></div>
-      <div class="stats" id="pr-stats"></div>
+    <!-- Collapse: hides everything but this button (no animation). -->
+    <button class="sb-collapse" id="sb-collapse" type="button" title="Collapse sidebar">«</button>
+
+    <div class="sb-inner">
+      <div class="pr-head">
+        <h1 id="pr-title">PR Review</h1>
+        <div class="pr-sub" id="pr-sub"></div>
+        <div class="stats" id="pr-stats"></div>
+      </div>
+
+      <!-- Review: the main action — compose and export your comments. Stays at the top. -->
+      <section class="sep">
+        <span class="section-label">Review summary
+          <span class="count-pill" id="comment-count">0</span></span>
+        <textarea id="summary" placeholder="Overall thoughts on this PR (optional if you left inline or file comments)…"></textarea>
+        <button class="primary" id="copy-btn">Copy all comments as JSON</button>
+      </section>
+
+      <!-- View: how the diff is displayed, and what extras are shown alongside it. -->
+      <section class="sep">
+        <span class="section-label">Diff view</span>
+        <select id="view-mode">
+          <option value="unified">Unified (inline)</option>
+          <option value="split">Split (side by side)</option>
+        </select>
+        <span class="hint" id="view-hint"></span>
+      </section>
+
+      <section>
+        <span class="section-label">Show</span>
+        <div class="toggle-grid">
+          <label class="toggle-chip" title="Read-only code explanations on each block">
+            <input type="checkbox" id="toggle-insights" checked />
+            <span>💡 Insights</span>
+            <span class="count-pill" id="insight-count">0</span>
+          </label>
+          <label class="toggle-chip" title="Each group's list of things worth a closer look">
+            <input type="checkbox" id="toggle-confirm" checked />
+            <span>✓ Things to confirm</span>
+            <span class="count-pill" id="confirm-count">0</span>
+          </label>
+          <label class="toggle-chip" title="Each group's File | Role manifest table">
+            <input type="checkbox" id="toggle-manifest" checked />
+            <span>📄 Files table</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- Navigate: jump around the diff by file or by group. -->
+      <details class="sb-section sep" id="sec-files" open>
+        <summary class="section-label">Files changed <span class="count-pill" id="file-count">0</span></summary>
+        <nav class="filetree" id="filetree"></nav>
+      </details>
+
+      <details class="sb-section" id="sec-groups" open>
+        <summary class="section-label">Groups</summary>
+        <nav class="toc" id="toc"></nav>
+      </details>
+
+      <section class="sep">
+        <button class="danger-btn" id="discard-btn">Delete Cached Comments</button>
+      </section>
     </div>
-
-    <!-- View: how the diff is displayed. -->
-    <section>
-      <span class="section-label">Diff view</span>
-      <select id="view-mode">
-        <option value="unified">Unified (inline)</option>
-        <option value="split">Split (side by side)</option>
-      </select>
-      <span class="hint" id="view-hint"></span>
-    </section>
-
-    <section>
-      <span class="section-label">Insights <span class="count-pill" id="insight-count">0</span></span>
-      <div class="toggle-row">
-        <input type="checkbox" id="toggle-insights" checked />
-        <label for="toggle-insights">💡 Show code explanations</label>
-      </div>
-      <span class="hint">Descriptive subtitles on each block (function, interface, const…)
-        explaining what it is and does. Read-only — not part of your review. Turn off for a
-        bare diff.</span>
-    </section>
-
-    <section>
-      <span class="section-label">Things to confirm <span class="count-pill" id="confirm-count">0</span></span>
-      <div class="toggle-row">
-        <input type="checkbox" id="toggle-confirm" checked />
-        <label for="toggle-confirm">✓ Show things worth confirming</label>
-      </div>
-      <span class="hint">Each group's short list of things worth a closer look. Advisory —
-        not part of your review. Turn off to hide them all.</span>
-    </section>
-
-    <!-- Review: compose and export your comments. -->
-    <section class="sep">
-      <span class="section-label">Review summary
-        <span class="count-pill" id="comment-count">0</span></span>
-      <textarea id="summary" placeholder="Overall thoughts on this PR (optional if you left inline or file comments)…"></textarea>
-    </section>
-
-    <section>
-      <span class="section-label">Export</span>
-      <button class="primary" id="copy-btn">Copy all comments as JSON</button>
-      <span class="hint">Copies your summary, line comments, and file comments together
-        in one JSON. Paste it back into Claude to post them to GitHub as review
-        comments.</span>
-      <button class="sm subtle" id="discard-btn">Discard saved draft</button>
-      <span class="hint">Your comments, summary, and reviewed marks are kept in this browser
-        for this PR's current commit, so a reload doesn't lose them. Nothing leaves your
-        machine until you export and paste.</span>
-    </section>
-
-    <!-- Navigate: jump around the diff by file or by group. -->
-    <details class="sb-section sep" id="sec-files" open>
-      <summary class="section-label">Files changed <span class="count-pill" id="file-count">0</span></summary>
-      <nav class="filetree" id="filetree"></nav>
-    </details>
-
-    <details class="sb-section" id="sec-groups" open>
-      <summary class="section-label">Groups</summary>
-      <nav class="toc" id="toc"></nav>
-    </details>
   </aside>
 
   <main id="groups"></main>

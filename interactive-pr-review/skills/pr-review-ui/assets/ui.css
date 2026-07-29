@@ -3,7 +3,7 @@
     --text: #e6edf3; --muted: #8b949e; --accent: #2f81f7;
     --add-bg: #12261e; --add-gutter: #1b3227; --del-bg: #25171c; --del-gutter: #3a1d24;
     --add-text: #3fb950; --del-text: #f85149; --line-no: #6e7681;
-    --btn: #21262d; --btn-hover: #30363d; --sidebar-w: 320px;
+    --btn: #21262d; --btn-hover: #30363d; --sidebar-w: 380px;
     --status-added: #3fb950; --status-modified: #d29922; --status-removed: #f85149;
     --status-renamed: #a371f7;
     --insight-bg: #1a1726; --insight-border: #8957e5; --insight-text: #d2c5f1;
@@ -33,13 +33,26 @@
   }
   .layout { display: flex; align-items: flex-start; min-height: 100vh; }
 
-  /* ---- Sidebar (fixed structure: header, summary, action, export, nav) ---- */
+  /* ---- Sidebar (fixed structure: header, review action, view, nav, destructive) ---- */
   aside.sidebar {
     position: sticky; top: 0; align-self: flex-start; flex: 0 0 var(--sidebar-w);
     width: var(--sidebar-w); height: 100vh; overflow-y: auto;
     background: var(--panel); border-right: 1px solid var(--border);
-    padding: 20px 16px; display: flex; flex-direction: column; gap: 16px;
+    padding: 20px 16px; display: flex; flex-direction: column;
   }
+  .sidebar .sb-inner { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  /* Collapsed: only the toggle button remains, so the diff gets the full width. */
+  aside.sidebar.collapsed { flex-basis: 44px; width: 44px; padding: 20px 6px; overflow: visible; }
+  aside.sidebar.collapsed .sb-inner { display: none; }
+  /* `width: auto` overrides the full-width `.sidebar button` rule below. */
+  .sidebar button.sb-collapse {
+    width: auto; align-self: flex-end; background: var(--btn); color: var(--muted);
+    border: 1px solid var(--border); border-radius: 6px; cursor: pointer;
+    padding: 2px 8px; font-size: 13px; line-height: 1.4; margin-bottom: 12px;
+  }
+  .sidebar button.sb-collapse:hover { background: var(--btn-hover); color: var(--text); }
+  aside.sidebar.collapsed .sb-collapse { align-self: center; margin-bottom: 0; }
+  .sidebar .pr-head { display: flex; flex-direction: column; gap: 6px; }
   .sidebar h1 { margin: 0; font-size: 15px; line-height: 1.35; }
   .sidebar h1 a { color: var(--accent); text-decoration: none; }
   .sidebar .pr-sub { color: var(--muted); font-size: 12px; word-break: break-word; }
@@ -64,12 +77,13 @@
     background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600;
   }
   .sidebar button.primary:hover { filter: brightness(1.08); }
-  /* Destructive-but-secondary: reads as a quiet link until hovered. */
-  .sidebar button.subtle {
-    background: none; border-color: transparent; color: var(--muted);
-    padding: 4px 0; margin-top: 8px; font-size: 12px; text-align: left;
+  /* Destructive action: outlined in the delete colour, filled only on hover. */
+  .sidebar button.danger-btn {
+    border-color: var(--status-removed); color: var(--del-text); font-weight: 600;
   }
-  .sidebar button.subtle:hover { color: var(--del-text); text-decoration: underline; }
+  .sidebar button.danger-btn:hover {
+    background: var(--status-removed); border-color: var(--status-removed); color: #fff;
+  }
   .sidebar .hint { color: var(--muted); font-size: 11px; }
   nav.toc { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
   nav.toc a {
@@ -95,14 +109,20 @@
   /* Divider that separates the sidebar's clusters (navigate / view / review). */
   .sidebar .sep { border-top: 1px solid var(--border); padding-top: 16px; }
 
-  /* File tree: directories nest as foldable rows that indent one step per level (--depth),
-     each holding its subdirectories and clickable file leaves. Navigation only. */
+  /* File tree: directories nest as foldable rows, each holding its subdirectories and
+     clickable file leaves inside a .ft-children box. Indentation comes from that box's
+     margin, and its left border draws the depth guide line — one continuous rule per level,
+     so a deeply nested file's ancestry stays readable. Navigation only. */
   nav.filetree { display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
   nav.filetree details.ft-node { display: block; }
+  nav.filetree .ft-children {
+    display: flex; flex-direction: column; gap: 1px;
+    margin-left: 7px; padding-left: 6px; border-left: 1px solid var(--border);
+  }
   nav.filetree summary.ft-dir {
     color: var(--muted); font-size: 11px; cursor: pointer; list-style: none;
     user-select: none; display: flex; align-items: center; gap: 5px; border-radius: 6px;
-    padding: 4px 8px; padding-left: calc(8px + var(--depth, 0) * 12px); word-break: break-all;
+    padding: 4px 8px; word-break: break-all;
   }
   nav.filetree summary.ft-dir::-webkit-details-marker { display: none; }
   nav.filetree summary.ft-dir::before {
@@ -112,7 +132,7 @@
   nav.filetree summary.ft-dir:hover { background: var(--btn-hover); }
   nav.filetree .ft-file {
     color: var(--text); text-decoration: none; font-size: 12px;
-    padding: 4px 8px; padding-left: calc(8px + var(--depth, 0) * 12px + 14px);
+    padding: 4px 8px 4px 14px;
     border-radius: 6px; display: flex; justify-content: space-between; gap: 8px;
     align-items: baseline; cursor: pointer; border: none; background: none;
     text-align: left; width: 100%; font-family: inherit;
@@ -221,6 +241,7 @@
     color: var(--line-no); word-break: break-all; margin-top: 2px;
   }
   table.manifest-table .mrole { color: var(--text); opacity: .9; }
+  body.hide-manifest .manifest { display: none; }
 
   /* ---- File block ---- */
   .file { border-top: 1px solid var(--border); scroll-margin-top: 12px; }
@@ -320,7 +341,9 @@
   tr.commentable td.code:hover { outline: 1px solid var(--accent); outline-offset: -1px; }
   tr.commentable.selected td.code { outline: 2px solid var(--accent); outline-offset: -2px; }
   /* Multi-line range: every line between the drag anchor and the current line is tinted,
-     and the range's first/last lines carry the accent edge so the span reads as one block. */
+     and the range's first/last lines carry the accent edge so the span reads as one block.
+     The tint persists while the range's comment editor is open (see paintLineRange) and is
+     handed off to `.comment-scope`'s rail once the comment is saved. */
   /* The gutter is tinted with the code only in unified view — in split, a row spans both
      sides and a range only ever covers one, so tinting the row's gutters would overreach. */
   table.diff:not(.split) tr.in-range td.ln,
@@ -445,9 +468,18 @@
   body.hide-insights tr.insight-scope td.code:not(.comment-scope) {
     box-shadow: none; background-image: none;
   }
-  .toggle-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-  .toggle-row input { width: auto; cursor: pointer; }
-  .toggle-row label { cursor: pointer; color: var(--text); }
+  /* Show-toggles: compact chips (icon + short label + count), no prose descriptions —
+     the title attribute carries the explanation that used to be a hint paragraph. */
+  .toggle-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  .toggle-chip {
+    display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 999px;
+    padding: 4px 10px; font-size: 12px; color: var(--muted); white-space: nowrap;
+  }
+  .toggle-chip:hover { background: var(--btn-hover); }
+  .toggle-chip input { margin: 0; cursor: pointer; }
+  .toggle-chip:has(input:checked) { color: var(--text); border-color: var(--accent); }
+  .toggle-chip:has(input:disabled) { opacity: .5; cursor: default; }
 
   .toast {
     position: fixed; bottom: 24px; left: calc(50% + var(--sidebar-w) / 2);
@@ -456,13 +488,16 @@
     pointer-events: none; z-index: 50;
   }
   .toast.show { opacity: 1; }
+  body.sb-collapsed .toast { left: calc(50% + 22px); }
 
   @media (max-width: 820px) {
     .layout { flex-direction: column; }
-    aside.sidebar {
+    aside.sidebar, aside.sidebar.collapsed {
       position: static; width: 100%; height: auto; flex-basis: auto;
-      border-right: none; border-bottom: 1px solid var(--border);
+      border-right: none; border-bottom: 1px solid var(--border); padding: 20px 16px;
     }
+    .sb-collapse { display: none; }
+    aside.sidebar.collapsed .sb-inner { display: flex; }
     #sec-groups { display: none; }
-    .toast { left: 50%; }
+    .toast, body.sb-collapsed .toast { left: 50%; }
   }

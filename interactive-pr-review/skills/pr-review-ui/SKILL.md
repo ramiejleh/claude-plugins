@@ -471,17 +471,22 @@ line, which is what GitHub anchors to); both ends must be on the same side.
 The UI is `assets/review-template.html`. Its structure is **fixed** — every generated
 page looks the same and only the injected data differs. It provides:
 
-- A **sticky sidebar** with PR title/stats in three clusters: **View** (Diff view selector,
-  insights toggle, things-to-confirm toggle), **Review** (summary box + the one-click "Copy
-  all comments as JSON" button), and **Navigate** (a **Files changed** tree and a **Groups**
-  table-of-contents, each folding independently). The Files changed tree is a true nested
-  hierarchy — one foldable level per directory segment — with every changed file as a
-  clickable leaf (for a file spanning groups, its first occurrence); clicking one scrolls to
-  that file and unfolds both it and its group. No approve/request-changes action.
+- A **sticky sidebar**, collapsible to a narrow strip via the `«`/`»` button (a plain
+  show/hide, no animation), ordered so the main action comes first: PR title/stats →
+  **Review** (summary box + the one-click "Copy all comments as JSON" button) → **Diff view**
+  selector → a **Show** row of compact toggle chips (💡 Insights, ✓ Things to confirm,
+  📄 Files table — each with its count, explanation in the tooltip rather than body text) →
+  **Navigate** (a **Files changed** tree and a **Groups** table-of-contents, each folding
+  independently) → a **Delete Cached Comments** button. The Files changed tree is a true
+  nested hierarchy — one foldable level per directory segment, each level drawing a vertical
+  guide line so depth stays readable — with every changed file as a clickable leaf (for a
+  file spanning groups, its first occurrence); clicking one scrolls to that file and unfolds
+  both it and its group. No approve/request-changes action.
 - A top **overview card** (from the top-level `overview`), omitted when `overview` is empty.
 - A main column of collapsible **groups**, each with its reasoning line, an **X/Y reviewed**
-  progress pill on the header, a "Things worth confirming" list (hidden by the sidebar
-  toggle), and a **file manifest table** (File | Role, linking down to each file's diff).
+  progress pill on the header, a "Things worth confirming" list, and a **file manifest table**
+  (File | Role, linking down to each file's diff) — the latter two each hidden by their
+  sidebar toggle chip.
 - Per **file**: a rich header (fold caret, status pill, path + rename arrow, language, +/−
   counts, Reviewed checkbox), the `description`, an optional **focus note** (which lines are
   this group's concern), a "Comment on this file" button, and an IDE-syntax-highlighted diff
@@ -503,8 +508,9 @@ page looks the same and only the injected data differs. It provides:
   labelled with the covered lines; `notable` ones render emphasized, `routine` ones
   dim/compact. A sidebar toggle hides them. They never enter the exported review.
 - **Three comment levels**: click a line — or **press and drag across several lines** to
-  comment on that whole range (the span tints as you drag; a saved multi-line comment keeps
-  an accent rail down the lines it covers) — click "Comment on this file", or use the sidebar
+  comment on that whole range (the span tints as you drag and **stays tinted while its editor
+  is open**, so you can see what you're commenting on; on save the tint clears and an accent
+  rail down the covered lines takes over) — click "Comment on this file", or use the sidebar
   summary. A range is normalized regardless of drag direction and must stay on one side; a
   multi-line comment exports `start_line`/`start_side` alongside its anchor `line`.
 - **Draft persistence**: comments, the summary, and reviewed/folded marks are saved to
@@ -512,7 +518,8 @@ page looks the same and only the injected data differs. It provides:
   starts a clean draft rather than resurrecting comments written against older code. Drafts
   older than 30 days are dropped. Every `file://` page shares one origin's storage, hence the
   per-PR key. Drafts are local only; nothing reaches GitHub until the reviewer exports and
-  confirms.
+  confirms. **Delete Cached Comments** (at the sidebar's foot) clears this PR's stored draft
+  after a confirm.
 
 `review-template.html` is the **skeleton only** — markup plus injection tokens. The
 stylesheet lives in `assets/ui.css` and the behaviour in `assets/ui.js`, both inlined at

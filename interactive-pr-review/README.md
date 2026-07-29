@@ -15,8 +15,9 @@ highlights, and annotates it — it never rewrites the code under review.
 
 - **PR overview** — a section at the top gives a concise, holistic summary of what the PR
   achieves in plain terms, so you get the big picture before reading a single diff.
-- **Sidebar layout** — the review summary, action selector, export button, and a
-  clickable group navigator live in a sticky sidebar, leaving the full width for the diff.
+- **Sidebar layout** — a sticky sidebar puts the review summary and export button right
+  under the PR title, then the diff-view selector, compact show/hide toggle chips, and the
+  file + group navigators. Collapse it to a narrow strip to give the diff the full width.
 - **IDE-style syntax highlighting** — diffs are colored with a vendored copy of
   highlight.js (GitHub light/dark themes), so the output is fully self-contained and
   needs no network at view time.
@@ -28,7 +29,8 @@ highlights, and annotates it — it never rewrites the code under review.
   sidebar (like the insight annotations) when you want just the diff.
 - **Per-group file manifest** — each group opens with a two-column table (file, role)
   linking down to each file's diff, so you can trace how the files work together before
-  diving in — aligned columns regardless of how long any path or role is.
+  diving in — aligned columns regardless of how long any path or role is. Toggle it off from
+  the sidebar for a leaner page.
 - **Two diff views** — switch between **Unified** (inline) and **Split** (old / new side
   by side) from the sidebar.
 - **Expandable context** — "⋯ expand" affordances around each hunk reveal the surrounding
@@ -151,8 +153,8 @@ moved):
    what the whole PR achieves. Claude writes this analysis layer to temp files — no code, only
    references to the parsed hunks — keeping your main context clean.
 3. **Review** — Claude generates and opens a self-contained HTML UI at
-   `/tmp/pr-<number>-review.html`: a sidebar (summary, one-click export, insights toggle,
-   things-to-confirm toggle, group nav) beside collapsible groups, each file
+   `/tmp/pr-<number>-review.html`: a collapsible sidebar (summary, one-click export, diff
+   view, show/hide toggles, file + group nav) beside collapsible groups, each file
    syntax-highlighted with a rich header,
    description, and 💡 insight bubbles. Comment at the line, file, or whole-review level.
 4. **Export** — click **Copy all comments as JSON** (one click captures the summary and

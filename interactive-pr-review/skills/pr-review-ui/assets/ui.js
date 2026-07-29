@@ -126,7 +126,7 @@ function discardDraft() {
   // Full re-render, not a body redraw: file-comment slots and reviewed/fold headers are
   // built by render(), which also resets every per-file registry.
   render();
-  flash("Draft discarded");
+  flash("Cached comments deleted");
 }
 
 function esc(s) {
@@ -309,6 +309,12 @@ function render() {
     confirmToggle.checked = false; confirmToggle.disabled = true;
     document.body.classList.add("hide-confirm");
   }
+
+  // Files-table toggle: disabled when no group has files to tabulate.
+  const manifestToggle = document.getElementById("toggle-manifest");
+  if (!root.querySelector(".manifest")) {
+    manifestToggle.checked = false; manifestToggle.disabled = true;
+  }
 }
 
 // Build the sidebar file tree: a real nested hierarchy, one foldable level per directory
@@ -336,19 +342,23 @@ function buildFileTree(fileNav) {
     node.files.push({ name, path, nav });
   });
 
-  // Render a node's subdirectories (foldable) then its files, indenting by depth.
-  (function renderNode(node, parent, depth) {
+  // Render a node's subdirectories (foldable) then its files. Each directory's contents go
+  // into a .ft-children box whose left border draws that level's vertical depth guide, so
+  // indentation and the guide lines come from the same nesting rather than padding math.
+  (function renderNode(node, parent) {
     node.dirs.forEach((child, seg) => {
       const det = document.createElement("details");
       det.className = "ft-node";
       det.open = true;
       const sum = document.createElement("summary");
       sum.className = "ft-dir";
-      sum.style.setProperty("--depth", depth);
       sum.textContent = seg + "/";
       det.appendChild(sum);
+      const kids = document.createElement("div");
+      kids.className = "ft-children";
+      det.appendChild(kids);
       parent.appendChild(det);
-      renderNode(child, det, depth + 1);
+      renderNode(child, kids);
     });
     node.files.forEach(({ name, path, nav }) => {
       const stats = [];
@@ -358,13 +368,12 @@ function buildFileTree(fileNav) {
       btn.className = "ft-file";
       btn.type = "button";
       btn.title = path;
-      btn.style.setProperty("--depth", depth);
       btn.innerHTML = "<span class='ft-name'>" + esc(name) + "</span>" +
         (stats.length ? "<span class='ft-stats'>" + stats.join("") + "</span>" : "");
       btn.addEventListener("click", () => jumpToFile(nav.gid, nav.domId));
       parent.appendChild(btn);
     });
-  })(root, tree, 0);
+  })(root, tree);
 }
 
 // Scroll to a file, unfolding its (possibly collapsed) group first, and flash it briefly.
@@ -401,6 +410,21 @@ function wireControls() {
   const confirmToggle = document.getElementById("toggle-confirm");
   confirmToggle.addEventListener("change", () =>
     document.body.classList.toggle("hide-confirm", !confirmToggle.checked));
+
+  const manifestToggle = document.getElementById("toggle-manifest");
+  manifestToggle.addEventListener("change", () =>
+    document.body.classList.toggle("hide-manifest", !manifestToggle.checked));
+
+  // Sidebar collapse: plain class flip, no animation. `sb-collapsed` on <body> lets the
+  // toast recentre over the widened main column.
+  const sbBtn = document.getElementById("sb-collapse");
+  const sidebar = document.querySelector("aside.sidebar");
+  sbBtn.addEventListener("click", () => {
+    const collapsed = sidebar.classList.toggle("collapsed");
+    document.body.classList.toggle("sb-collapsed", collapsed);
+    sbBtn.textContent = collapsed ? "»" : "«";
+    sbBtn.title = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  });
 
   const view = document.getElementById("view-mode");
   const hint = document.getElementById("view-hint");
@@ -781,16 +805,18 @@ function wireRangeSelection(table) {
   });
 }
 
-// Paint the in-progress selection: tint every commentable cell inside the range.
-function paintRange(table) {
+/**
+ * Tint the commentable cells of [lo,hi] on `side`, clearing any previous tint first. Pass a
+ * null `side` to just clear. Drives both the live drag and the range's editor: the tint
+ * persists while the editor is open so the span you picked stays visible while you type.
+ */
+function paintLineRange(table, side, lo, hi) {
   table.querySelectorAll("td.code.in-range").forEach(c => c.classList.remove("in-range"));
   table.querySelectorAll("tr.in-range, tr.range-start, tr.range-end")
     .forEach(r => r.classList.remove("in-range", "range-start", "range-end"));
-  if (!dragSel) return;
-  const lo = Math.min(dragSel.anchor, dragSel.current);
-  const hi = Math.max(dragSel.anchor, dragSel.current);
+  if (side == null) return;
   table.querySelectorAll("td.code.commentable").forEach(cell => {
-    if (cell.dataset.side !== dragSel.side) return;
+    if (cell.dataset.side !== side) return;
     const n = Number(cell.dataset.line);
     if (n < lo || n > hi) return;
     cell.classList.add("in-range");
@@ -800,17 +826,26 @@ function paintRange(table) {
   });
 }
 
+// Paint the in-progress selection: tint every commentable cell inside the range.
+function paintRange(table) {
+  if (!dragSel) { paintLineRange(table, null); return; }
+  paintLineRange(table, dragSel.side,
+    Math.min(dragSel.anchor, dragSel.current), Math.max(dragSel.anchor, dragSel.current));
+}
+
 // Release anywhere ends the drag; if it ended on a valid range, open the editor for it.
 document.addEventListener("pointerup", () => {
   if (!dragSel) return;
   const { table, side, anchor, current } = dragSel;
   dragSel = null;
   document.body.classList.remove("range-dragging");
-  paintRange(table);
   const start = Math.min(anchor, current), end = Math.max(anchor, current);
   const cols = table.classList.contains("split") ? 4 : 3;
   const anchorTr = lineRow(table, side, end);
+  // The tint is NOT cleared here — toggleLineEditor repaints it for the range whose editor
+  // it opens, so the picked span stays visible while you type.
   if (anchorTr) toggleLineEditor(table, anchorTr, table._path, side, start, end, cols);
+  else paintRange(table);
 });
 
 // The <tr> whose commentable cell on `side` carries line `line`.
@@ -843,6 +878,7 @@ function toggleLineEditor(table, anchorTr, path, side, startLine, endLine, cols)
   // If the editor for THIS exact range is already open, treat the interaction as a cancel.
   if (existingEditor && existingEditor._key === key && existingEditor._start === startLine) {
     existingEditor.remove(); anchorTr.classList.remove("selected");
+    paintLineRange(table, null);
     if (lineComments.has(key)) redrawFiles(path);
     return;
   }
@@ -873,6 +909,10 @@ function toggleLineEditor(table, anchorTr, path, side, startLine, endLine, cols)
     "</div></div></td>";
   anchorTr.after(row);
   anchorTr.classList.add("selected");
+  // Keep the range tinted for as long as this editor is open, so the lines the comment will
+  // apply to stay visible while typing. Cleared on save/cancel/delete — after a save the
+  // span is marked instead by the saved comment's own rail.
+  paintLineRange(table, side, start, end);
   const ta = row.querySelector("textarea"); ta.focus();
 
   row.querySelector(".save").addEventListener("click", () => {
