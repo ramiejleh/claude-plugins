@@ -14,11 +14,9 @@ A PR counts as cached when its `/tmp/pr-<n>-groups.json` exists — that's the s
 `reopen` rebuilds the UI from, and it carries both `pr.headSha` (the analyzed commit) and
 `pr.url` (used to resolve the repo).
 
-**Freshness = head-SHA equality.** Fresh means the live head SHA equals the cached one, so
-`reopen` would open the cache as-is. Any change to the PR moves the head SHA — one extra
-commit on top, a force-push, a rebase, or an amend — and the PR is reported **STALE**, which
-means `reopen` would re-analyze it. This check makes one `gh` call per cached PR, so it is
-**not** offline (unlike a bare artifact listing).
+**Freshness = head-SHA equality**, the same comparison `reopen` itself makes. Anything that
+moves the head SHA — a new commit, force-push, rebase, or amend — marks the PR **STALE**.
+This makes one `gh` call per cached PR, so it is **not** offline.
 
 ## Step — Scan, check freshness, and print the table
 
@@ -85,10 +83,8 @@ PY
 - If the script prints `NO_CACHE`: tell the user there are no cached PR reviews yet, and
   that `/interactive-pr-review:review <pr#>` will analyze one (its artifacts then persist).
 - Otherwise show the table and interpret the `fresh` column:
-  - **fresh** — the PR is unchanged since analysis; `/interactive-pr-review:reopen <pr#>`
-    opens the cache instantly, no re-analysis.
-  - **STALE** — the PR's head moved (new commit / force-push / rebase / amend);
-    `reopen <pr#>` will re-analyze it against the current diff.
+  - **fresh** — `/interactive-pr-review:reopen <pr#>` opens the cache instantly.
+  - **STALE** — `reopen <pr#>` will re-analyze it against the current diff.
   - **?** — freshness couldn't be determined (offline, not authenticated, the PR was
     deleted, or the cache lacks a head SHA). `reopen` will fetch and decide, or fail loudly.
 - Remind them they can also `/interactive-pr-review:cleanup <pr#>` (one PR) or
@@ -99,6 +95,4 @@ PY
 - Listing is keyed on `groups.json`. If a PR's `groups.json` was removed but stray
   intermediates remain, it won't appear here — `cleanup` (all) still clears those leftovers.
 - `age` is the newest artifact's modification time (how recently it was analyzed/reopened),
-  not the PR's own activity. `fresh`/`STALE` is the authoritative signal for whether a
-  reopen would re-analyze; it always agrees with what `reopen` itself would decide, because
-  both compare the same cached `pr.headSha` against the same live head SHA.
+  not the PR's own activity.

@@ -1,13 +1,13 @@
 {
   "name": "interactive-pr-review",
-  "version": "1.21.0",
+  "version": "1.22.0",
   "description": "Interactively review GitHub PRs — Claude fetches the PR, groups the diff into logical chunks with reasoning, presents them in a review UI, and posts your line comments back to GitHub.",
   "author": {
     "name": "Rami Ejleh",
     "url": "https://github.com/ramiejleh"
   },
-  "homepage": "https://github.com/ramiejleh/interactive-pr-review",
-  "repository": "https://github.com/ramiejleh/interactive-pr-review",
+  "homepage": "https://github.com/ramiejleh/claude-plugins/tree/main/interactive-pr-review",
+  "repository": "https://github.com/ramiejleh/claude-plugins",
   "license": "MIT",
   "keywords": [
     "github",

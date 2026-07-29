@@ -99,7 +99,6 @@ Then report what was removed (count and, for a single PR, that its cache is gone
 
 - This only touches `/tmp/pr-*` artifacts created by this plugin. It never deletes anything
   in the repo or the GitHub PR.
-- If the user only wants to free space but keep the ability to reopen, note that
-  `-review.html` and the intermediate `-diff`/`-parsed`/`-analysis` files can be
-  regenerated from `-groups.json` alone — but this command removes a PR's set as a whole
-  for simplicity. Point them at a specific `rm` if they ask for finer control.
+- This command removes a PR's set as a whole. If the user wants to free space but keep the
+  ability to reopen, everything except `-groups.json` is regenerable from it — point them at
+  a specific `rm`.

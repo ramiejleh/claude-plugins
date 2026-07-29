@@ -18,14 +18,10 @@ auto-cleans them), so a review can be revisited without re-fetching and re-analy
 
 ## Guiding principles
 
-- **Fresh-only.** Never show a cached review that no longer matches the PR. Compare the
-  cached head SHA against the live PR head; if they differ, re-analyze rather than
-  reopening stale artifacts.
-- **The cache is the groups JSON.** `/tmp/pr-$1-groups.json` is the single artifact that
-  drives the UI and carries `pr.headSha` / `pr.url`. Everything the reopen needs comes
-  from it (plus the vendored assets).
-- **Never alter the diff.** The re-analysis path follows the same "diff is sacred" rules as
-  the review command.
+- **Fresh-only.** Never show a cached review that no longer matches the PR. If the cached
+  head SHA differs from the live one, re-analyze instead of reopening stale artifacts.
+- **The cache is the groups JSON.** `/tmp/pr-$1-groups.json` drives the UI and carries
+  `pr.headSha` / `pr.url` — everything the reopen needs, plus the vendored assets.
 
 ## Step 0 — Load the skill
 
@@ -93,8 +89,9 @@ open it. Rebuild (don't just reopen a leftover `.html`): it guarantees the curre
 and assets are used, and works even if `/tmp/pr-$1-review.html` was cleaned while the groups
 JSON was kept.
 
-Run the §4 script with `PR=$1` (reads the fixed template + vendored `highlight.min.js` +
-`hljs-github-theme.css` + `/tmp/pr-$1-groups.json`, writes `/tmp/pr-$1-review.html`), then:
+Run the §4 script with `PR=$1` (reads the fixed template + `ui.css` + `ui.js` + the vendored
+`highlight.min.js` + `hljs-github-theme.css` + `/tmp/pr-$1-groups.json`, writes
+`/tmp/pr-$1-review.html`), then:
 
 ```bash
 open /tmp/pr-$1-review.html      # macOS; xdg-open (Linux) / start (Windows)
@@ -118,16 +115,11 @@ artifacts for #$1. Defer to the skill and the `review` command for the mechanics
 duplicate the pipeline details here. After it opens, proceed as a normal review (comment,
 export, post per Step 5 / skill §6).
 
-## Note on artifacts
+## Notes
 
-Artifacts for #$1 remain in `/tmp` after reopening (by design). To remove them, use
-`/interactive-pr-review:cleanup $1` (or `/interactive-pr-review:cleanup` to clear all
-cached PRs).
-
-## Edge cases
-
-- **No cached data:** Step 2 stops with the "run review first" message.
-- **PR now merged/closed:** the freshness/fetch step reports the state; a stale re-analysis
-  may return an empty diff — report it and stop.
+- Artifacts for #$1 remain in `/tmp` after reopening (by design). Remove them with
+  `/interactive-pr-review:cleanup $1` (or with no argument to clear all cached PRs).
+- **PR now merged/closed:** the freshness step reports the state; a re-analysis may return
+  an empty diff — report it and stop.
 - **Malformed/partial cache** (e.g. groups JSON missing `pr.headSha`): treat as stale and
   offer to re-analyze, or point the user at `cleanup $1` then `review $1`.

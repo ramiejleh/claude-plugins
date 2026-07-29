@@ -35,22 +35,23 @@ highlights, and annotates it — it never rewrites the code under review.
   real file lines on demand (a chunk at a time, or all), so you can trace how a change
   sits in the file without leaving the diff. Expanded lines are commentable too.
 - **Inline insight annotations** — read-only 💡 notes aimed at the **change**, not a
-  narration of every block: for a modified block, *what moved and its consequence*; *who
-  calls it* (real callers looked up in the repo, so you see the blast radius); *why it
-  exists* (drawn from the PR description); and a plain what-it-does only where the code
-  isn't self-evident. Each sits above its block with a left rail and line label, and carries
-  an attention tier — **notable** insights (🔎) render emphasized so the ones you shouldn't
-  skim past stand out from **routine** context. Toggle them off from the sidebar for a bare
-  diff; they stay descriptive (evaluation lives in "Things worth confirming") and are never
-  part of your review.
+  narration of every block: *what moved and its consequence*; *who calls it* (real callers
+  looked up in the repo, so you see the blast radius); *why it exists* (from the PR
+  description); and a plain what-it-does only where the code isn't self-evident. Each sits
+  above its block with a left rail and line label; **notable** insights render emphasized so
+  the ones you shouldn't skim past stand out from **routine** context. Toggle them off for a
+  bare diff — they stay descriptive and are never part of your review.
 - **Three comment levels** — click a line, comment on a whole file, or write an overall
   review summary. **One click** copies all of them (summary + line + file comments)
   together as JSON.
 - **Multi-line comments** — drag across a run of lines to pin one comment to that whole
-  range instead of a single line. The span tints as you drag, and a saved range keeps an accent
-  rail running down the lines it covers and straight into the comment box's own left border, so
-  the range and its comment read as one block (it stays unbroken whether insight bubbles are
-  shown or hidden). It posts to GitHub as a real multi-line review comment.
+  range instead of a single line. The span tints as you drag, and a saved range keeps an
+  accent rail down the lines it covers and into the comment box's own border, so the range
+  and its comment read as one block. It posts to GitHub as a real multi-line review comment.
+- **Your draft survives a reload** — comments, the summary, and reviewed/folded marks are
+  saved locally, keyed to the PR *and* its head commit, so closing the tab doesn't lose your
+  work and a new push starts you on a clean draft instead of comments written against older
+  code. Drafts stay local; nothing reaches GitHub until you export and confirm.
 - **Comments only** — this tool exists to leave review comments. It never approves or
   requests changes.
 - **Deterministic UI** — the HTML structure is fixed; only the injected data differs, so
@@ -69,38 +70,41 @@ highlights, and annotates it — it never rewrites the code under review.
 
 ## Installation
 
-### Try it locally (from a checkout)
-
-If you have the folder on disk, install straight from it — handy while developing:
-
-```
-/plugin install ./interactive-pr-review
-```
-
-### For your team (from the marketplace repo)
-
-Once the marketplace has been pushed to GitHub, each teammate adds the marketplace once and
-installs the plugin from it:
+Add the marketplace once, then install the plugin from it:
 
 ```
 /plugin marketplace add ramiejleh/claude-plugins
-/plugin install interactive-pr-review
+/plugin install interactive-pr-review@ramiejleh-plugins
 ```
 
-`gh` must be installed and authenticated (`gh auth login`) — the plugin checks this on
-session start.
-
-To pick up a newer version after the maintainer publishes one:
+To pick up a newer version after one is published:
 
 ```
-/plugin marketplace update ramiejleh-plugins              # refresh the marketplace listing
-/plugin install interactive-pr-review                     # reinstall at the new version
+/plugin marketplace update ramiejleh-plugins                 # refresh the marketplace listing
+/plugin install interactive-pr-review@ramiejleh-plugins      # reinstall at the new version
 ```
 
-> Two different identifiers: you **add** by `owner/repo` (`ramiejleh/claude-plugins`), but
-> **update** by the marketplace's registered *name* (`ramiejleh-plugins`, from the `name`
-> field in `marketplace.json`). They differ because Claude Code reserves the `claude-`
-> prefix for official marketplaces, so the name can't match the repo here.
+> You **add** by `owner/repo` (`ramiejleh/claude-plugins`) but **install/update** by the
+> marketplace's registered *name* (`ramiejleh-plugins`, the `name` field in
+> `marketplace.json`). They differ because Claude Code reserves the `claude-` prefix for
+> official marketplaces, so the name can't match the repo here.
+
+### From a local checkout (development)
+
+Plugins always install **from a marketplace**, so point Claude Code at the repo root (the
+directory holding `.claude-plugin/marketplace.json`, not the plugin subdirectory) and then
+install by name — `/plugin install ./interactive-pr-review` does not work, because `install`
+takes a name and only `marketplace add` takes a path:
+
+```
+/plugin marketplace add /absolute/path/to/this/repo
+/plugin install interactive-pr-review@ramiejleh-plugins
+```
+
+A local marketplace whose `name` matches one you already have replaces that entry, so the
+checkout takes over; re-add `ramiejleh/claude-plugins` to switch back. After editing
+`commands/` or `hooks/`, run `/reload-plugins` to pick the change up — skill files are re-read
+live.
 
 ## Usage
 
@@ -144,8 +148,8 @@ moved):
 2. **Group** — the diff is split into logical chunks (feature, tests, config,
    incidental changes…), each with a neutral reasoning line, a "Things worth confirming"
    list, per-file descriptions, and inline insight bubbles, plus a holistic **overview** of
-   what the whole PR achieves. Claude writes this analysis layer directly to a temp file —
-   no code, only references to the parsed hunks — keeping your main context clean.
+   what the whole PR achieves. Claude writes this analysis layer to temp files — no code, only
+   references to the parsed hunks — keeping your main context clean.
 3. **Review** — Claude generates and opens a self-contained HTML UI at
    `/tmp/pr-<number>-review.html`: a sidebar (summary, one-click export, insights toggle,
    things-to-confirm toggle, group nav) beside collapsible groups, each file
@@ -172,22 +176,22 @@ Nothing is ever posted to GitHub without your explicit confirmation.
 | Command | `/interactive-pr-review:list` | Lists the PRs with cached artifacts (number, title, size, age) and checks each one's freshness against GitHub (fresh = head commit unchanged since analysis; any new commit / force-push / rebase marks it STALE). |
 | Command | `/interactive-pr-review:cleanup [pr#]` | Removes cached artifacts — one PR's, or all (`/tmp/pr-*`). Lists and confirms before deleting. |
 | Skill | `pr-review-ui` | Procedures for the parse → analyze → merge pipeline, building the review UI, and posting comments. The whole workflow runs in the main chat — no subagent. |
-| Scripts | `parse_diff.py`, `merge_analysis.py` | Deterministic diff parsing and analysis-merge. The diff never passes through the model. |
+| Scripts | `parse_diff.py`, `assemble_analysis.py`, `merge_analysis.py` | Deterministic diff parsing, fragment assembly, and analysis-merge. The diff never passes through the model. |
 | Hook | `SessionStart` gh check | Warns (non-blocking) if `gh` is missing or unauthenticated. |
 
 ### Architecture: the diff never passes through the model
 
-Earlier versions had the model regenerate the entire diff as JSON — slow, expensive,
-prone to dropping on large PRs, and the one place the "diff is sacred" rule could break.
-Now a Python script (`parse_diff.py`) parses the diff into byte-exact hunks with stable
-`hunkId`s; Claude (in the main chat) emits **only the analysis** (an overview, titles,
-neutral descriptions, "things worth confirming", insights, and which `hunkId`s are each
-group's concern); and `merge_analysis.py` joins them, embeds full file contents, and
-enforces invariants (every referenced hunk exists; **every changed file is always shown** —
-anything the analysis didn't place is swept into an "Other changes" group, and the merge
-fails rather than hide a file; a file appearing in several groups carries its **full diff**
-in each). The model never emits a line of code, so it can't alter one — nor drop one — and
-its output is a small fraction of the diff's size.
+`parse_diff.py` parses the diff into byte-exact hunks with stable `hunkId`s. Claude emits
+**only the analysis** — an overview, titles, neutral descriptions, "things worth confirming",
+insights, and which `hunkId`s are each group's concern — written as small per-group fragments
+so one dropped write costs a fragment rather than the whole analysis. `merge_analysis.py`
+joins the two, embeds full file contents, and enforces the invariants: every referenced hunk
+must exist, and **every changed file is always shown** — anything the analysis didn't place is
+swept into an "Other changes" group, and the merge fails rather than hide a file (a file
+spanning groups carries its full diff in each).
+
+Because the model never emits a line of code, it cannot alter or drop one — "the diff is
+sacred" is structural, not a rule the model is asked to follow.
 
 ## How comments are anchored
 
@@ -214,8 +218,13 @@ interactive-pr-review/
 │   ├── SKILL.md                   # parse / analyze / merge / UI / post procedures
 │   ├── scripts/
 │   │   ├── parse_diff.py          # diff → canonical hunks (deterministic)
+│   │   ├── assemble_analysis.py   # per-group fragments → one analysis JSON
 │   │   └── merge_analysis.py      # analysis + hunks → final groups JSON
-│   └── assets/review-template.html# the review UI template
+│   └── assets/
+│       ├── review-template.html   # UI skeleton (markup + injection tokens)
+│       ├── ui.css                 # stylesheet, inlined at build time
+│       ├── ui.js                  # behaviour, inlined at build time
+│       └── vendor/                # highlight.js + GitHub theme (no network at view time)
 ├── hooks/
 │   ├── hooks.json                 # SessionStart hook registration
 │   └── check-gh-auth.sh           # gh install + auth check

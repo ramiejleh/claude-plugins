@@ -49,6 +49,7 @@ import base64
 import json
 import subprocess
 import sys
+from concurrent import futures
 
 
 def die(msg):
@@ -110,20 +111,85 @@ def block_end(linemap, start, cap=600):
     return end
 
 
-def fetch_full_content(repo, sha, paths, statuses):
-    """Return {path: text or None} via `gh api contents`. Skips binary/removed."""
-    cache = {}
+def _fetch_local(sha, paths):
+    """Read blobs for `sha:path` out of the local object store in ONE `git cat-file
+    --batch` process. Returns {path: text} for the objects that resolved; paths absent
+    from the result (missing object, or no local repo/commit) are left for the API.
+
+    Cheap by design: a network round trip per file costs ~400ms, a local batch read costs
+    ~1ms, and the head commit is usually already present when reviewing from a checkout."""
+    if not paths:
+        return {}
+    try:
+        proc = subprocess.Popen(["git", "cat-file", "--batch"],
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL)
+    except Exception:
+        return {}
+    query = "".join("%s:%s\n" % (sha, p) for p in paths).encode("utf-8")
+    try:
+        raw = proc.communicate(input=query, timeout=120)[0]
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return {}
+
+    # Replies come back in request order: either "<oid> <type> <size>\n<size bytes>\n"
+    # or "<request> missing\n". Walk them positionally against `paths` — every sized reply
+    # must advance past its payload even when we don't want it (a submodule resolves to a
+    # `commit`, not a blob), or the walk desyncs and every later file is lost.
+    out = {}
+    pos = 0
     for p in paths:
-        if statuses.get(p) in ("binary", "removed"):
+        nl = raw.find(b"\n", pos)
+        if nl < 0:
+            break
+        header = raw[pos:nl]
+        pos = nl + 1
+        parts = header.rsplit(b" ", 2)
+        if len(parts) != 3:
+            continue                 # "missing" / "ambiguous": header only, no payload
+        try:
+            size = int(parts[2])
+        except ValueError:
             continue
+        if parts[1] == b"blob":
+            out[p] = raw[pos:pos + size].decode("utf-8", "replace")
+        pos += size + 1              # trailing newline git appends after the payload
+    return out
+
+
+def _fetch_api(repo, sha, paths, workers=8):
+    """Return {path: text or None} via `gh api contents`, fetched concurrently.
+
+    The calls are independent network round trips, so they overlap freely; a pool keeps
+    a 100+ file PR from serializing ~400ms of latency per file."""
+    def one(p):
         try:
             raw = subprocess.run(
                 ["gh", "api", "-H", "Accept: application/vnd.github+json",
                  "/repos/%s/contents/%s?ref=%s" % (repo, p, sha), "--jq", ".content"],
                 capture_output=True, text=True, check=True).stdout.strip()
-            cache[p] = base64.b64decode(raw).decode("utf-8", "replace") if raw else None
+            return p, base64.b64decode(raw).decode("utf-8", "replace") if raw else None
         except Exception:
-            cache[p] = None
+            return p, None
+
+    if not paths:
+        return {}
+    with futures.ThreadPoolExecutor(max_workers=min(workers, len(paths))) as pool:
+        return dict(pool.map(one, paths))
+
+
+def fetch_full_content(repo, sha, paths, statuses):
+    """Return {path: text or None} for the expand-context feature. Skips binary/removed.
+
+    Local object store first (one batch process, no network), then `gh api` concurrently
+    for whatever the local repo didn't have."""
+    wanted = [p for p in paths if statuses.get(p) not in ("binary", "removed")]
+    cache = _fetch_local(sha, wanted)
+    cache.update(_fetch_api(repo, sha, [p for p in wanted if p not in cache]))
     return cache
 
 

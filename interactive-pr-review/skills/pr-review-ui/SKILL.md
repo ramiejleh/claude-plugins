@@ -22,9 +22,9 @@ wants to review a PR carefully.
 3. **Anchor to the head commit.** Review comments must reference the PR's latest head
    SHA, or they will fail to attach or attach to the wrong revision.
 4. **The grouping JSON lives in a temp file, by design.** It is far too large to pass
-   through the conversation. You author the analysis directly (in the main chat — no
-   subagent) and write it as small per-group fragment files that a script assembles and
-   merges into that temp JSON, then inject it into the HTML with a script.
+   through the conversation. You author the analysis as small per-group fragment files that a
+   script assembles and merges into that temp JSON, then inject it into the HTML with a
+   script.
    Neither the big JSON nor the big HTML should be pasted into the main context. The temp
    files are kept afterward (so a review can be reopened) and removed only via the manual
    `cleanup` command — never auto-deleted at the end of a review.
@@ -67,18 +67,14 @@ diff. Always prefer `gh`.
 
 The grouping JSON is built by four stages: **parse → write per-group fragments → assemble →
 merge**. **The diff never passes through the language model as output** — deterministic
-scripts own it; you (in the main chat) produce only the analysis layer, which is small. This
-makes the "diff is sacred" rule structural (you can't alter a line you never emit) and
-eliminates the huge-response failures that plagued the earlier one-shot approach. The scripts
-and assets live under the plugin root at `skills/pr-review-ui/{scripts,assets}/` — see
-**Resolving the plugin root** below for how to locate it reliably from a shell.
+scripts own it; you produce only the analysis layer, which is small. That makes the "diff is
+sacred" rule structural: you can't alter a line you never emit. The scripts and assets live
+under the plugin root at `skills/pr-review-ui/{scripts,assets}/` — see **Resolving the plugin
+root** below for how to locate it reliably from a shell.
 
-**Run every stage in the main conversation — do not spawn a subagent.** Stages A, C, and D
-are plain script calls. Stage B is authored by you directly: you read the parsed diff and
-write the analysis as **small per-group fragment files** (one bounded write each), which
-Stage C stitches into the analysis JSON. Writing the analysis in fragments — rather than one
-giant heredoc — is what keeps large PRs reliable: if a single write is dropped mid-stream,
-only that one fragment is lost and re-written, not the whole analysis.
+**Run every stage in the main conversation — do not spawn a subagent unless the user
+explicitly asks for one.** Stages A, C, and D are plain script calls; Stage B is the one you
+author.
 
 ### Resolving the plugin root
 
@@ -116,7 +112,7 @@ python3 "$SCRIPTS/parse_diff.py" /tmp/pr-$PR.diff /tmp/pr-$PR-parsed.json --pr-j
 deletions, hunks: [ { hunkId, header, oldStart, newStart, lines: [ {type, oldLine,
 newLine, text} ] } ] } ] }`. This is the byte-exact source of truth for the code.
 
-**Stage B — analyze (you, in the main chat — no subagent).** Read `/tmp/pr-<number>-parsed.json`
+**Stage B — analyze (you).** Read `/tmp/pr-<number>-parsed.json`
 (and the raw `.diff` for extra context if useful) and author the **analysis only** — a
 top-level `overview`, then groups with titles, neutral `reasoning`, `thingsToConfirm`,
 per-file `role`/`description`/`insights`, and the `hunkIds` that are each group's file's
@@ -151,7 +147,7 @@ Each fragment is one self-contained JSON object (see the schema below): `00-over
 holds `{"overview": …}`; each `NN-<groupid>.json` holds one group object. The numeric prefix
 sets the order groups appear on screen (keep it aligned with "most-important-first"). Because
 each write is a small fraction of the diff, none is at risk of being truncated; if one ever is,
-just re-write that single file. There is no subagent round-trip.
+just re-write that single file.
 
 How to author each field:
 
@@ -184,8 +180,8 @@ How to author each field:
   entry point", "unit tests"). Keep roles distinct across a group's files where possible.
 - **`description`** (per file, 1–2 sentences): neutral, descriptive — what changed in this
   file for this group's hunks. Describe, don't evaluate.
-- **`insights`** (per file): descriptive subtitles for EVERY logical block — see the detailed
-  rules just below.
+- **`insights`** (per file): descriptive annotations on the blocks that need them — see the
+  detailed rules just below.
 
 **Authoring `insights` — tell the reviewer what they can't already see.** Insights are
 read-only annotations layered over a block of code. The reviewer can *read the code*; a
@@ -319,8 +315,13 @@ python3 "$SCRIPTS/merge_analysis.py" /tmp/pr-$PR-parsed.json /tmp/pr-$PR-analysi
 # -> OK groups: G files: F hunks: H insights: I [| swept N unassigned file(s) into 'Other changes'] [| note N file(s) shown in multiple groups (full diff each)] -> …
 ```
 
-Passing `--repo`/`--sha` makes the merge fetch each text file's content at the head SHA
-via `gh api` and set `fullContent` (powering "⋯ expand context"); omit them to skip that.
+Passing `--repo`/`--sha` makes the merge read each text file's content at the head SHA and
+set `fullContent` (powering "⋯ expand context"); omit them to skip that. It reads the
+**local git object store first** (one `git cat-file --batch` process — no network) and falls
+back to `gh api` concurrently for anything the checkout doesn't have, so run it from inside
+the repo when you can: local reads are ~100× faster per file than the API. The lookup is by
+`<sha>:<path>`, so a local hit is the byte-exact blob for that commit or nothing at all —
+there is no way to read a stale revision.
 If the output notes it `swept N unassigned file(s) into 'Other changes'`, those files were
 covered but not thematically grouped — usually worth revising the analysis to place them in
 a meaningful group, though the review is still complete either way.
@@ -356,36 +357,36 @@ deliberately grouped file reviews better than one dumped in the catch-all.
 The UI renders each insight bubble **directly above its `startLine`**, so a `startLine` that
 is off by even a few lines puts the whole bubble on the wrong code. This is the single most
 common alignment bug, and it is invisible once the HTML is built — so **catch it here, before
-the merge/build**. This snippet does not guess: it prints, for every RIGHT-side insight, the
-**actual code** sitting at its `startLine` and `endLine` (from `parsed.json`), so you read the
-code back instead of trusting a number you wrote:
+the merge/build**. This snippet does not guess: it prints, for every insight, the **actual
+code** sitting at its `startLine` and `endLine` (from `parsed.json`, on the insight's own
+side), so you read the code back instead of trusting a number you wrote:
 
 ```bash
 python3 - /tmp/pr-$PR-analysis.json /tmp/pr-$PR-parsed.json <<'PY'
 import json, sys
 a = json.load(open(sys.argv[1])); parsed = json.load(open(sys.argv[2]))
-# Per file: {newLine: text} on the RIGHT side, and total lines shown.
-right = {}
+# Per file, per side: {lineNumber: text} for every line the diff shows.
+sides = {}
 for f in parsed["files"]:
-    m = {}
+    r, l = {}, {}
     for h in f["hunks"]:
         for ln in h["lines"]:
-            if ln.get("newLine") is not None:
-                m[ln["newLine"]] = ln["text"]
-    right[f["path"]] = m
+            if ln.get("newLine") is not None: r[ln["newLine"]] = ln["text"]
+            if ln.get("oldLine") is not None: l[ln["oldLine"]] = ln["text"]
+    sides[f["path"]] = {"RIGHT": r, "LEFT": l}
 for g in a["groups"]:
     for f in g["files"]:
-        m = right.get(f["path"], {})
+        per_side = sides.get(f["path"], {"RIGHT": {}, "LEFT": {}})
         for ins in f.get("insights", []):
-            if ins.get("side", "RIGHT") != "RIGHT":
-                continue
+            side = ins.get("side", "RIGHT")
+            m = per_side.get(side, {})
             s, e = ins.get("startLine"), ins.get("endLine", ins.get("startLine"))
             flags = []
             if s not in m: flags.append("START-NOT-IN-DIFF")
             if e is not None and e not in m and e != s: flags.append("END-NOT-IN-DIFF")
             if e is not None and s is not None and e < s: flags.append("END<START")
-            print("%s L%s-%s %s %s" % (f["path"], s, e, ins.get("kind",""),
-                                       ("  <-- " + ",".join(flags)) if flags else ""))
+            print("%s %s L%s-%s %s %s" % (f["path"], side, s, e, ins.get("kind",""),
+                                          ("  <-- " + ",".join(flags)) if flags else ""))
             print("    start-> %s" % (repr(m.get(s)) if s in m else "(line not shown in diff)"))
             print("    text :  %s" % ((ins.get("text") or "")[:70]))
 PY
@@ -398,10 +399,6 @@ number in `parsed.json` and correct it (and shift `endLine` by the same amount).
 `START-NOT-IN-DIFF` / `END<START` flag is a definite error to fix. Re-run `assemble` after
 editing the fragment, then re-run this check until every `start->` matches its `text`. Only
 then merge and build.
-
-Writing the analysis as small per-group fragments — assembled deterministically — keeps it
-reliable regardless of PR size: a dropped write costs one fragment, not the whole analysis.
-There is no subagent step.
 
 ### Final groups JSON (merge output — what the UI consumes)
 
@@ -446,23 +443,17 @@ file appears in several groups and this group is just part of its concern; it na
 relevant lines (e.g. `"12–20, 44"`) and the UI shows a note that the rest of the diff is
 context.
 
-`insights[]` are **read-only annotations that tell the reviewer what the code doesn't** —
-for a changed block, what moved and its consequence; who calls it (blast radius); why it
-exists (PR intent); and, only where non-obvious, what it does. They are authored for the
-*change*, not as a narration of every block (see Stage B for the full authoring rules). Each
-has `side` (`RIGHT`/`LEFT`), a line **range** `startLine`/`endLine` spanning the whole block,
-a lowercase `kind` (the block type, e.g. `function`/`interface`/`const`/`component`/`test`),
-a `level` (`notable` or `routine`, default `routine`), and descriptive `text`. The UI marks
-the block with a left rail and renders the 💡 subtitle **above the first line**, labelled
-with the covered lines (e.g. "Lines 12–20"); `notable` insights render emphasized and
-`routine` ones dim/compact, so the important ones stand out in a long file. A sidebar toggle
-hides them all for a bare diff. Insights stay descriptive (facts, not judgements — evaluation
-lives in `thingsToConfirm`) and are never part of the exported review. (Older data with a
-single `line`, or with no `level`, still works — a missing `level` renders as `routine`.)
+`insights[]` are read-only annotations authored for the *change* (see Stage B for the
+authoring rules). Each has `side` (`RIGHT`/`LEFT`), a line **range** `startLine`/`endLine`
+spanning the whole block, a lowercase `kind` (the block type, e.g.
+`function`/`interface`/`const`/`component`/`test`), a `level` (`notable` or `routine`,
+default `routine`), and descriptive `text`. §3 covers how the UI renders them. (Older data
+with a single `line`, or with no `level`, still works.)
 
 `fullContent` (optional per file) is the file's complete text at the head SHA, added by
-the merge step's `--repo/--sha` fetch. When present the UI adds **"⋯ expand context"**
-affordances around each hunk to reveal surrounding real file lines inline.
+the merge step's `--repo/--sha` read. When present the UI adds **"⋯ expand context"**
+affordances around each hunk. A file whose content couldn't be read (deleted, moved,
+permission) simply has none and shows no expand affordance; the diff itself is unaffected.
 
 ### Diff / anchoring mechanics
 
@@ -480,75 +471,68 @@ line, which is what GitHub anchors to); both ends must be on the same side.
 The UI is `assets/review-template.html`. Its structure is **fixed** — every generated
 page looks the same and only the injected data differs. It provides:
 
-- A **sticky sidebar** with PR title/stats, organized into three clusters: **View** (the
-  Diff view selector, insights toggle, things-to-confirm toggle), **Review** (the summary
-  box and the one-click "Copy all comments as JSON" button), and **Navigate**
-  (a collapsible **Files changed** tree and a collapsible **Groups** table-of-contents). The
-  Files changed tree is a true nested hierarchy — one foldable level per directory segment,
-  indented further at each depth — with every changed file as a clickable leaf (for a file
-  spanning groups, its first occurrence); clicking one scrolls to that file and unfolds its
-  group if it was collapsed. Both Navigate sections fold in/out independently. (No
-  approve/request-changes action — this is a comments-only tool.)
-- A top **overview card** (from the top-level `overview`) summarizing what the whole PR
-  achieves, shown above the groups. Omitted when `overview` is empty.
-- A main column of collapsible **groups**, each with a neutral reasoning line, an
-  **X/Y reviewed** progress pill on the header, a
-  "Things worth confirming" list (hidden by the sidebar toggle, like the insights), and a
-  **file manifest table** (File | Role, linking down to each file's diff) so the reviewer
-  can trace how the files fit together.
-- **Reviewed progress tracking**: each file header has a **Reviewed** checkbox the reviewer
-  ticks as they work through the diff. Ticking **folds that file's diff away** and advances
-  the **X/Y reviewed** pill on its group's header, which highlights green once every
-  file in the group is checked. State is keyed by **path**, so a file appearing in several
-  groups stays in sync everywhere it's shown, and each group counts its own distinct files.
-  This is the reviewer's local progress only — it is never part of the exported comment JSON.
-- **Folding**: a caret (`▾`/`▸`) at the start of every file header folds or unfolds that
-  file's diff independently of the Reviewed checkbox — a reviewed file can be re-opened
-  without unticking it, and an unreviewed file can be collapsed out of the way. Folded state
-  is also keyed by path and synced across a file's copies, and navigating to a folded file
-  from the **Files changed** tree unfolds it automatically. A saved file-level comment stays
-  visible while the file is folded.
-- Per **file**: a rich header (fold caret, status pill, path + rename arrow, language,
-  +/− counts, Reviewed checkbox),
-  the AI `description`, an optional **focus note** (when the file spans groups: which lines
-  are this group's concern), a "Comment on this file" button, and an IDE-syntax-highlighted
-  diff (via vendored highlight.js) with GitHub-style add/remove backgrounds and dual
-  line numbers. When a file appears in several groups it shows its **full diff** in each,
-  with the hunks that aren't this group's concern dimmed (still commentable).
-- A **Diff view** selector (sidebar) with two modes: **Unified** (inline, default) and
-  **Split** (old on the left, new on the right).
-- **Expandable context**: when `fullContent` is embedded, "⋯ expand" rows appear in the
-  gaps around each hunk; clicking reveals the surrounding real file lines (a chunk at a
-  time, or all) inline, so the reviewer can trace how a change sits in the file without
-  loading a separate full-file view. Revealed lines are commentable too.
-- **Inline insight subtitles**: read-only 💡 annotations (from each file's `insights[]`)
-  aimed at the *change* — what moved and its consequence, who calls it, why it exists — not
-  a narration of every block. Each marks its block with a left rail and renders **above the
-  block's first line**, labelled with the covered lines; `notable` insights render
-  emphasized and `routine` ones dim/compact so the important ones stand out. A sidebar
-  toggle hides them for a bare diff. They never enter the exported review.
-- **Three comment levels**: click a line to comment on it — or **press and drag across
-  several lines** to comment on that whole range (the dragged span tints as you go; a saved
-  multi-line comment keeps an accent rail down the lines it covers) — click "Comment on this
-  file" for a file-level comment, and the sidebar summary for the overall review. Comments
-  are stored in state and re-rendered, so editing one never loses it. A range is normalized
-  regardless of drag direction and must stay on one side (LEFT or RIGHT); a multi-line
-  comment exports `start_line`/`start_side` alongside its anchor `line`.
+- A **sticky sidebar** with PR title/stats in three clusters: **View** (Diff view selector,
+  insights toggle, things-to-confirm toggle), **Review** (summary box + the one-click "Copy
+  all comments as JSON" button), and **Navigate** (a **Files changed** tree and a **Groups**
+  table-of-contents, each folding independently). The Files changed tree is a true nested
+  hierarchy — one foldable level per directory segment — with every changed file as a
+  clickable leaf (for a file spanning groups, its first occurrence); clicking one scrolls to
+  that file and unfolds both it and its group. No approve/request-changes action.
+- A top **overview card** (from the top-level `overview`), omitted when `overview` is empty.
+- A main column of collapsible **groups**, each with its reasoning line, an **X/Y reviewed**
+  progress pill on the header, a "Things worth confirming" list (hidden by the sidebar
+  toggle), and a **file manifest table** (File | Role, linking down to each file's diff).
+- Per **file**: a rich header (fold caret, status pill, path + rename arrow, language, +/−
+  counts, Reviewed checkbox), the `description`, an optional **focus note** (which lines are
+  this group's concern), a "Comment on this file" button, and an IDE-syntax-highlighted diff
+  (vendored highlight.js) with GitHub-style add/remove backgrounds and dual line numbers. A
+  file appearing in several groups shows its **full diff** in each, with the hunks that
+  aren't this group's concern dimmed (still commentable).
+- **Reviewed + folding**: ticking a file's **Reviewed** checkbox folds its diff away and
+  advances its group's **X/Y reviewed** pill, which turns green at 100%. The fold caret
+  works independently of the checkbox. Both states are keyed by **path**, so they stay in
+  sync across a file's copies; a saved file-level comment stays visible while folded. This
+  is local progress only — never part of the exported JSON.
+- A **Diff view** selector with two modes: **Unified** (inline, default) and **Split** (old
+  left, new right).
+- **Expandable context**: when `fullContent` is embedded, "⋯ expand" rows appear in the gaps
+  around each hunk and reveal the surrounding real file lines (a chunk at a time, or all)
+  inline. Revealed lines are commentable too.
+- **Inline insight subtitles**: read-only 💡 annotations (from each file's `insights[]`).
+  Each marks its block with a left rail and renders **above the block's first line**,
+  labelled with the covered lines; `notable` ones render emphasized, `routine` ones
+  dim/compact. A sidebar toggle hides them. They never enter the exported review.
+- **Three comment levels**: click a line — or **press and drag across several lines** to
+  comment on that whole range (the span tints as you drag; a saved multi-line comment keeps
+  an accent rail down the lines it covers) — click "Comment on this file", or use the sidebar
+  summary. A range is normalized regardless of drag direction and must stay on one side; a
+  multi-line comment exports `start_line`/`start_side` alongside its anchor `line`.
+- **Draft persistence**: comments, the summary, and reviewed/folded marks are saved to
+  `localStorage` and restored on reload, keyed by PR number **and head SHA** — so a new push
+  starts a clean draft rather than resurrecting comments written against older code. Drafts
+  older than 30 days are dropped. Every `file://` page shares one origin's storage, hence the
+  per-PR key. Drafts are local only; nothing reaches GitHub until the reviewer exports and
+  confirms.
 
-The template has three placeholder tokens, each appearing exactly once:
-`/* __HLJS_LIB__ */`, `/* __HLJS_THEME__ */`, and `/*__PR_REVIEW_DATA__*/ null`.
+`review-template.html` is the **skeleton only** — markup plus injection tokens. The
+stylesheet lives in `assets/ui.css` and the behaviour in `assets/ui.js`, both inlined at
+build time. The template has five placeholder tokens, each appearing exactly once:
+`/* __HLJS_LIB__ */`, `/* __HLJS_THEME__ */`, `  /* __UI_CSS__ */` (the two leading spaces
+are part of the token), `/* __UI_JS__ */`, and `/*__PR_REVIEW_DATA__*/ null`.
 
-> Full file contents (for the "⋯ expand context" feature) are fetched by the **merge
-> step** (Stage D) when you pass `--repo`/`--sha` — no separate fetch pass is needed. A
-> file whose content can't be fetched (deleted, moved, permission) simply has no
-> `fullContent` and shows no expand affordance; the diff itself is unaffected. Larger
-> content means a larger HTML file — warn the user if the total is very large (> ~5 MB).
+> **Injection order matters:** the data token lives *inside* `ui.js`, so `ui.js` must be
+> injected before it or the data token won't be there to replace. The other three are
+> independent.
+
+> Embedded `fullContent` makes the HTML larger — warn the user if the built page is very
+> large (> ~5 MB).
 
 ## 4. Build the UI by injecting data + vendored assets (script, not by hand)
 
 Do **not** hand-edit the huge JSON into the template. Run a small script that reads the
-template, the vendored `highlight.min.js`, the vendored `hljs-github-theme.css`, and the
-groups JSON, replaces the three tokens, and writes `/tmp/pr-<number>-review.html`. Resolve
+template, `ui.css`, `ui.js`, the vendored `highlight.min.js`, the vendored
+`hljs-github-theme.css`, and the
+groups JSON, replaces the five tokens, and writes `/tmp/pr-<number>-review.html`. Resolve
 the plugin root first (see **Resolving the plugin root** in §2 — `$CLAUDE_PLUGIN_ROOT` is
 empty in ad-hoc Bash, and shell state doesn't carry between blocks, so resolve it again
 here); the skill assets live under `skills/pr-review-ui/assets/`.
@@ -564,19 +548,25 @@ ASSETS="$PLUGIN_ROOT/skills/pr-review-ui/assets"
 python3 - "$ASSETS" "/tmp/pr-$PR-groups.json" "/tmp/pr-$PR-review.html" <<'PY'
 import json, sys, pathlib
 assets, data_path, out_path = map(pathlib.Path, sys.argv[1:4])
-tpl   = (assets / "review-template.html").read_text()
+tpl   = (assets / "review-template.html").read_text()   # skeleton: markup + tokens
+ui_css = (assets / "ui.css").read_text().rstrip("\n")
+ui_js  = (assets / "ui.js").read_text().rstrip("\n")
 lib   = (assets / "vendor" / "highlight.min.js").read_text()
 theme = (assets / "vendor" / "hljs-github-theme.css").read_text()
 data  = pathlib.Path(data_path).read_text().strip()
 json.loads(data)  # validate before injecting
 
-# Inject lib and theme first (they contain no other tokens), then the data.
+# Order matters: inject ui.js BEFORE the data token, because the data token lives inside
+# ui.js. Everything else is independent.
 for tok, val in [("/* __HLJS_LIB__ */", lib),
                  ("/* __HLJS_THEME__ */", theme),
+                 ("  /* __UI_CSS__ */", ui_css),
+                 ("/* __UI_JS__ */", ui_js),
                  ("/*__PR_REVIEW_DATA__*/ null", data)]:
     assert tpl.count(tok) == 1, f"expected exactly one {tok!r}, found {tpl.count(tok)}"
     tpl = tpl.replace(tok, val)
-for leftover in ("__HLJS_LIB__", "__HLJS_THEME__", "__PR_REVIEW_DATA__"):
+for leftover in ("__HLJS_LIB__", "__HLJS_THEME__", "__UI_CSS__", "__UI_JS__",
+                 "__PR_REVIEW_DATA__"):
     assert leftover not in tpl, f"leftover token {leftover}"
 pathlib.Path(out_path).write_text(tpl)
 print("OK wrote", out_path, tpl.__len__(), "chars")
@@ -650,12 +640,12 @@ files are kept on purpose so the PR can be reopened later with
 `/interactive-pr-review:reopen <PR>` — which rebuilds the UI from `/tmp/pr-$PR-groups.json`
 without re-fetching or re-analyzing (as long as the PR's head SHA hasn't moved).
 
-A PR's full artifact set is these 7 files:
+A PR's full artifact set:
 
 ```bash
 /tmp/pr-$PR.diff /tmp/pr-$PR-meta.json /tmp/pr-$PR-parsed.json \
-/tmp/pr-$PR-analysis.json /tmp/pr-$PR-groups.json /tmp/pr-$PR-review.html \
-/tmp/pr-$PR-review-payload.json
+/tmp/pr-$PR-analysis.d/ /tmp/pr-$PR-analysis.json /tmp/pr-$PR-groups.json \
+/tmp/pr-$PR-review.html /tmp/pr-$PR-review-payload.json
 ```
 
 Removal is manual, via the `cleanup` command — never as an end-of-review step:

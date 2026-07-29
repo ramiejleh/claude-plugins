@@ -60,7 +60,8 @@ If the PR is merged/closed with an empty diff, report the state and stop.
 ## Step 3 — Parse → analyze → assemble → merge (the pipeline; see skill §2)
 
 The grouping JSON is built by four stages; **the diff never passes through the model as
-output**, and **every stage runs in the main chat — do not spawn a subagent.**
+output**, and **every stage runs in the main chat — do not spawn a subagent unless the user
+explicitly asks for one.**
 
 1. **Parse (deterministic):** resolve the plugin root first (see skill §2 "Resolving the
    plugin root" — `$CLAUDE_PLUGIN_ROOT` is empty in ad-hoc Bash), then run the parser:
@@ -95,7 +96,8 @@ output**, and **every stage runs in the main chat — do not spawn a subagent.**
    prevents insight bubbles from rendering a few lines off in the built UI.
 4. **Merge (deterministic):** `python3 …/scripts/merge_analysis.py /tmp/pr-$1-parsed.json /tmp/pr-$1-analysis.json /tmp/pr-$1-groups.json --repo <owner/name> --sha <headSha>`.
    This joins the analysis onto the real hunks, embeds `fullContent` (for "⋯ expand
-   context") via `--repo`/`--sha`, and **enforces invariants**: it errors on unknown
+   context") via `--repo`/`--sha` — read from the local git objects when available, else
+   `gh api` in parallel — and **enforces invariants**: it errors on unknown
    `hunkId`s, and **guarantees coverage**: any unplaced hunk or hunkless file (binary,
    rename) not placed by the analysis is swept into a synthetic "Other changes" group, and
    the merge errors out if anything is still unshown — so every changed file always appears.
@@ -107,37 +109,30 @@ output**, and **every stage runs in the main chat — do not spawn a subagent.**
 ## Step 4 — Build and open the review UI
 
 Run the injection script from the skill (§4) to produce `/tmp/pr-$1-review.html`: it reads
-the fixed template, the vendored `highlight.min.js` and `hljs-github-theme.css`, and
-`/tmp/pr-$1-groups.json`, replaces the three tokens, and writes the self-contained HTML.
+the fixed template, `ui.css`, `ui.js`, the vendored `highlight.min.js` and
+`hljs-github-theme.css`, and `/tmp/pr-$1-groups.json`, replaces the five tokens, and writes
+the self-contained HTML.
 Then open it (`open /tmp/pr-$1-review.html` on macOS).
 
-Tell the user the page has: a top **overview card** summarizing what the whole PR achieves,
-a **sidebar** organized into View (a **Diff view** selector — Unified / Split, an insights
-show/hide toggle, a things-to-confirm show/hide toggle), Review (summary + one-click export
-button), and Navigate (a foldable, nested **Files changed** tree that scrolls to any file —
-unfolding its group if collapsed — and a foldable **Groups** nav), collapsible
-**groups** with reasoning, a "Things worth confirming" list (which the toggle hides), and a
-file manifest **table** (File | Role, linking to each file's
-diff), and per **file** a rich header + neutral description + IDE-highlighted diff. Each
-file header carries a **Reviewed** checkbox for tracking progress — ticking it folds that
-file's diff away and advances an **X/Y reviewed** counter on its group's
-header, which turns green at 100%; a file appearing in several groups stays in sync across
-all of them. A **caret** at the start of each file header folds/unfolds that file on its own,
-independently of the checkbox, and jumping to a folded file from the Files changed tree
-unfolds it. Reviewed and folded state are local progress only, never part of the export. A file
-that appears in several groups shows its **full diff** in each, with the hunks that aren't
-this group's concern dimmed and a focus note naming the relevant lines. Around each hunk,
-"⋯ expand context" reveals the surrounding real file lines on demand. Inline 💡 **insight
-subtitles** sit above each
-logical block (function, interface, const group, component, conditional, test…),
-describing what it is/does/takes/is-used-for — like explanatory comments over the file;
-toggle them off for a bare diff. They can comment at three levels —
-click a line (including expanded context lines) or **drag across several lines to comment on
-that whole range**, "Comment on this file", or the overall
-summary — then click **Copy all comments as JSON** (one click captures summary + line +
-file comments together) and paste it back. This is a comments-only tool: there is no
-approve or
-request-changes. (Insight bubbles are just guidance; they're never part of the export.)
+Then walk the user through the page (skill §3 is the full description):
+
+- **Sidebar** — View (Unified / Split diff selector, insights toggle, things-to-confirm
+  toggle), Review (summary box + one-click export), Navigate (nested **Files changed** tree
+  and **Groups** nav; clicking a file scrolls to it and unfolds it).
+- **Overview card**, then collapsible **groups** — each with reasoning, "Things worth
+  confirming", and a File | Role manifest table linking to each file's diff.
+- **Per file** — rich header, description, IDE-highlighted diff, a **Reviewed** checkbox
+  (feeds the group's X/Y pill) and a fold caret. A file spanning groups shows its full diff
+  in each, non-relevant hunks dimmed with a focus note. "⋯ expand context" reveals
+  surrounding real file lines. 💡 insight bubbles annotate the notable blocks.
+- **Commenting** — click a line, or drag across several to comment on the whole range;
+  "Comment on this file"; or the sidebar summary. Then **Copy all comments as JSON** and
+  paste it back.
+- Reviewed/folded state and insight bubbles are never part of the export. Comments only —
+  no approve or request-changes.
+
+Their draft (comments, summary, reviewed marks) is saved locally per PR + head SHA, so a
+reload won't lose it.
 
 ## Step 5 — Post the comments back to GitHub (comments-only)
 
