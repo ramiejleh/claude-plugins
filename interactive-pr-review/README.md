@@ -46,6 +46,13 @@ highlights, and annotates it — it never rewrites the code under review.
 - **Three comment levels** — click a line, comment on a whole file, or write an overall
   review summary. **One click** copies all of them (summary + line + file comments)
   together as JSON.
+- **Comment counters** — a `💬 N` badge on each group header and each file header shows how
+  many comments you have left there, so you can see at a glance where you stopped. The badge
+  stays hidden where you haven't written anything.
+- **Written for a global audience** — the overview, group and file descriptions, "things worth
+  confirming", and insight notes are all written in plain, direct English aimed at non-native
+  speakers: short sentences and common words, with no idioms or unexplained shorthand. The
+  technical substance is unchanged; only the wording is made easier to read.
 - **Multi-line comments** — drag across a run of lines to pin one comment to that whole
   range instead of a single line. The span tints as you drag, and a saved range keeps an
   accent rail down the lines it covers and into the comment box's own border, so the range

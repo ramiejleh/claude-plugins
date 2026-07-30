@@ -149,6 +149,26 @@ sets the order groups appear on screen (keep it aligned with "most-important-fir
 each write is a small fraction of the diff, none is at risk of being truncated; if one ever is,
 just re-write that single file.
 
+**Write for human consumption and for a non-native-English-speaking audience.** This applies
+to *every* piece of prose you author here — `overview`, group `title` and `reasoning`,
+`thingsToConfirm`, per-file `role` and `description`, and insight `text`. Concretely:
+
+- Short, plain sentences, one idea each. Prefer active voice and a direct subject-verb-object
+  order over nested clauses.
+- Use common words instead of rare or figurative ones ("removes" not "obviates", "before" not
+  "antecedent to"). No idioms, metaphors, sarcasm, or cultural references ("the elephant in
+  the room", "belt and braces", "kick the tires").
+- No unexplained abbreviations or shorthand. Spell a term out on first use; keep the technical
+  terms the code itself uses (`hunk`, `middleware`, `reducer`) — those are the shared
+  vocabulary, and replacing them would be less clear, not more.
+- Avoid phrasal verbs where one plain verb exists ("cancel" not "call off", "start" not "kick
+  off"), and avoid stacking three or more nouns in a row.
+- Say things once, directly. No filler, no throat-clearing, no jokes.
+
+The goal is prose a reviewer reads once and understands — not simplified content, just plain
+language. Never dumb down the substance: the technical detail stays, only the wording gets
+easier.
+
 How to author each field:
 
 - **`overview`** (top-level, 1–3 short sentences / paragraphs): a holistic, plain-language
@@ -483,12 +503,17 @@ page looks the same and only the injected data differs. It provides:
   file spanning groups, its first occurrence); clicking one scrolls to that file and unfolds
   both it and its group. No approve/request-changes action.
 - A top **overview card** (from the top-level `overview`), omitted when `overview` is empty.
-- A main column of collapsible **groups**, each with its reasoning line, an **X/Y reviewed**
-  progress pill on the header, a "Things worth confirming" list, and a **file manifest table**
-  (File | Role, linking down to each file's diff) — the latter two each hidden by their
-  sidebar toggle chip.
+- A main column of collapsible **groups**, each with its reasoning line, a **💬 N** comment
+  counter and an **X/Y reviewed** progress pill on the header, a "Things worth confirming"
+  list, and a **file manifest table** (File | Role, linking down to each file's diff) — the
+  latter two each hidden by their sidebar toggle chip.
+- **Comment counters**: a `💬 N` badge on every group header (comments across all of that
+  group's files) and on every file header (that file's line comments plus its file-level
+  comment). The badge is hidden at zero, so only the places you have written on are marked.
+  It updates live as comments are saved or deleted, and is progress display only — never
+  exported.
 - Per **file**: a rich header (fold caret, status pill, path + rename arrow, language, +/−
-  counts, Reviewed checkbox), the `description`, an optional **focus note** (which lines are
+  counts, comment counter, Reviewed checkbox), the `description`, an optional **focus note** (which lines are
   this group's concern), a "Comment on this file" button, and an IDE-syntax-highlighted diff
   (vendored highlight.js) with GitHub-style add/remove backgrounds and dual line numbers. A
   file appearing in several groups shows its **full diff** in each, with the hunks that

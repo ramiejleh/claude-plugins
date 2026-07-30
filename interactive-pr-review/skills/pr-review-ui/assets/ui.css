@@ -190,6 +190,16 @@
   .group summary .progress.done {
     color: var(--status-added); border-color: var(--status-added);
   }
+  /* Comment counter, on a group header and on each file header: how many comments the
+     reviewer has left there. Hidden entirely at zero so untouched groups/files stay quiet. */
+  .cbadge {
+    color: var(--accent); font-size: 11px; font-weight: 700; padding: 2px 8px;
+    border: 1px solid var(--accent); border-radius: 999px; white-space: nowrap;
+    flex: 0 0 auto;
+  }
+  .cbadge.empty { display: none; }
+  /* The group's file count already pushes to the right; the badge follows it. */
+  .group summary .cbadge { margin-left: 0; }
   .reasoning {
     padding: 0 16px 14px 42px; color: var(--muted);
     border-bottom: 1px solid var(--border);

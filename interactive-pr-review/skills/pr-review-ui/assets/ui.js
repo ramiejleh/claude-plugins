@@ -22,6 +22,8 @@ const collapsedFiles = new Set();
 const reviewedNodes = new Map();
 // Per-group progress updaters, run whenever any checkbox changes.
 const groupProgress = [];
+// Per-group and per-file comment-count updaters, run whenever any comment changes.
+const commentCounters = [];
 
 // Count of AI insight bubbles rendered (read-only; not part of the review).
 let insightCount = 0;
@@ -169,6 +171,23 @@ function highlight(text, lang) {
   catch (e) { return esc(text); }
 }
 
+/** How many comments (line + file) the reviewer has left on `path`. */
+function commentsOnPath(path) {
+  let n = fileComments.has(path) ? 1 : 0;
+  lineComments.forEach(c => { if (c.path === path) n++; });
+  return n;
+}
+
+/**
+ * Point a badge element at a comment total: shows the number when there is one and hides
+ * itself when there are none, so a group or file with nothing on it stays visually quiet.
+ */
+function setCommentBadge(el, n, label) {
+  el.textContent = n ? "💬 " + n : "";
+  el.title = n ? n + " comment(s) " + label : "";
+  el.classList.toggle("empty", n === 0);
+}
+
 function statusClass(s) {
   s = (s || "modified").toLowerCase();
   return ["added", "modified", "removed", "renamed", "binary"].includes(s) ? s : "modified";
@@ -201,6 +220,7 @@ function render() {
   fileBodies.length = 0;
   reviewedNodes.clear();
   groupProgress.length = 0;
+  commentCounters.length = 0;
 
   // Overview: holistic summary of what the PR achieves, above the groups.
   if (DATA.overview && String(DATA.overview).trim()) {
@@ -272,6 +292,7 @@ function render() {
     details.innerHTML =
       "<summary><span class='title'>" + esc(g.title) + "</span>" +
       "<span class='count'>" + fileCount + " file(s)</span>" +
+      "<span class='cbadge'></span>" +
       "<span class='progress' title='Files marked reviewed in this group'></span></summary>" +
       (g.reasoning ? "<div class='reasoning'>" + esc(g.reasoning) + "</div>" : "") +
       confirm + manifest;
@@ -290,6 +311,12 @@ function render() {
     };
     groupProgress.push(updateProgress);
     updateProgress();
+
+    // Comment counter for this group: the comments left on any of its files, so the reviewer
+    // can see at a glance which groups they have already written on.
+    const gBadge = details.querySelector("summary .cbadge");
+    commentCounters.push(() => setCommentBadge(gBadge,
+      groupPaths.reduce((sum, p) => sum + commentsOnPath(p), 0), "in this group"));
   });
   updateCount();
   buildFileTree(fileNav);
@@ -461,6 +488,7 @@ function renderFile(f, domId) {
       "<button class='fold-btn' type='button' title='Fold/unfold this file'>▾</button>" +
       "<span class='file-status " + sc + "'>" + esc(f.status || "modified") + "</span>" +
       "<span class='file-path'>" + rename + esc(f.path) + "</span>" +
+      "<span class='cbadge'></span>" +
       "<label class='reviewed-box' title='Mark this file as reviewed'>" +
         "<input type='checkbox' class='reviewed-input' />Reviewed</label>" +
     "</div>" +
@@ -474,6 +502,10 @@ function renderFile(f, domId) {
     "<div class='actions'><button class='file-comment-btn' data-path='" + esc(f.path) +
       "'>💬 Comment on this file</button></div>";
   wrap.appendChild(header);
+
+  // Comment counter for this file — counts its line comments plus its file-level comment.
+  const fBadge = header.querySelector(".cbadge");
+  commentCounters.push(() => setCommentBadge(fBadge, commentsOnPath(f.path), "on this file"));
 
   const fileCommentSlot = document.createElement("div");
   wrap.appendChild(fileCommentSlot);
@@ -1018,6 +1050,7 @@ function setFileBtn(header, has) {
 function updateCount() {
   document.getElementById("comment-count").textContent =
     lineComments.size + fileComments.size;
+  commentCounters.forEach(fn => fn());
 }
 
 /** Persist the summary as it's typed, and wire the discard-draft button. */

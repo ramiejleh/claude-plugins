@@ -83,7 +83,10 @@ explicitly asks for one.**
    `NN` prefix sets on-screen order). Writing fragments — not one giant heredoc — is what keeps
    large PRs reliable: a dropped response loses only that one fragment, which you re-write.
    The skill (§2) has the full field-by-field guidance for grouping and for the per-block
-   insight subtitles.
+   insight subtitles. **Write every piece of that prose for human consumption and for a
+   non-native-English-speaking audience** — short plain sentences, common words, no idioms or
+   unexplained shorthand, while keeping the technical substance and the code's own terms
+   (skill §2 spells out the rules).
 3. **Assemble & validate (deterministic + your review):** stitch the fragments into
    `/tmp/pr-$1-analysis.json`:
    `python3 …/scripts/assemble_analysis.py /tmp/pr-$1-analysis.d /tmp/pr-$1-analysis.json`
