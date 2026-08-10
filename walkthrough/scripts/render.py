@@ -13,6 +13,7 @@ network.
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import subprocess
 import sys
@@ -66,6 +67,13 @@ def git_commit(root: Path) -> str:
 def build_excerpt(excerpt: dict, root: Path) -> dict:
     """Pull the real lines around the focus range, with context either side."""
     path = (root / excerpt["path"]).resolve()
+    # The validator already rejects paths outside the root, but re-checking here
+    # keeps the guarantee inside the function that does the reading rather than
+    # resting on a caller in another module having run first.
+    try:
+        path.relative_to(root.resolve())
+    except ValueError:
+        raise ValueError(f"excerpt path escapes the project root: {excerpt['path']}")
     text = path.read_text(errors="ignore")
     all_lines = text.splitlines()
     start, end = excerpt["focus"]
@@ -110,8 +118,11 @@ def render(payload: dict) -> str:
     # `</` inside a script block would close it early; the escape is invisible
     # to JSON.parse but keeps the document well-formed.
     blob = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
+    # The title is the one value substituted into markup rather than into the
+    # JSON payload, so it is the one that has to be escaped. Everything else
+    # reaches the page through JSON.parse and textContent.
     return (
-        template.replace("__TITLE__", payload["title"])
+        template.replace("__TITLE__", html.escape(payload["title"], quote=True))
         .replace("/*__CSS__*/", (ASSETS / "ui.css").read_text())
         .replace("/*__HLJS__*/", (ASSETS / "vendor" / "highlight.min.js").read_text())
         .replace("/*__PAYLOAD__*/", f"window.WALKTHROUGH = {blob};")
@@ -161,7 +172,13 @@ def main() -> int:
     if args.out:
         out = Path(args.out)
     else:
-        out = root / ".walkthroughs" / f"{payload['id']}.html"
+        folder = (root / ".walkthroughs").resolve()
+        out = (folder / f"{payload['id']}.html").resolve()
+        try:
+            out.relative_to(folder)
+        except ValueError:
+            print(f"error: id {payload['id']!r} escapes the output directory", file=sys.stderr)
+            return 1
         if not args.no_gitignore:
             ensure_gitignored(root, ".walkthroughs")
     out.parent.mkdir(parents=True, exist_ok=True)

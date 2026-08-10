@@ -9,12 +9,17 @@ they are worth acting on.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
 MAX_EXCERPT_LINES = 40
 MAX_BUBBLE_WORDS = 60
 MAX_TITLE_WORDS = 12
+
+# `id` becomes a filename, so it has to be a plain slug. Dots are excluded
+# outright rather than filtered, which removes any question of "..".
+ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 def _is_text(path: Path) -> bool:
@@ -37,6 +42,12 @@ def validate(doc: dict, root: Path) -> tuple[list[str], list[str]]:
             errors.append(f"missing required field: {field}")
     if errors:
         return errors, warnings
+
+    if not ID_PATTERN.match(str(doc["id"])):
+        errors.append(
+            f"id {doc['id']!r} is not a plain slug — letters, digits, hyphen and "
+            f"underscore only. It is used as a filename."
+        )
 
     if not root.is_dir():
         errors.append(f"root is not a directory: {root}")
