@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import catalog  # noqa: E402
 from validate import validate  # noqa: E402
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
@@ -181,7 +182,8 @@ def render(payload: dict) -> str:
     # reaches the page through JSON.parse and textContent.
     return (
         template.replace("__TITLE__", html.escape(payload["title"], quote=True))
-        .replace("/*__CSS__*/", (ASSETS / "ui.css").read_text())
+        .replace("/*__CSS__*/", (ASSETS / "tokens.css").read_text()
+                            + (ASSETS / "ui.css").read_text())
         .replace("/*__HLJS__*/", (ASSETS / "vendor" / "highlight.min.js").read_text())
         .replace("/*__PAYLOAD__*/", f"window.WALKTHROUGH = {blob};")
         .replace("/*__JS__*/", (ASSETS / "ui.js").read_text())
@@ -242,6 +244,14 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render(payload))
 
+    if not args.out:
+        # Keep the source doc beside the page. Without it a walkthrough can only
+        # ever be rebuilt from scratch, so editing step 4 would mean re-tracing
+        # the whole thing.
+        (out.parent / f"{payload['id']}.json").write_text(json.dumps(doc, indent=2) + "\n")
+        catalog.record(root, payload, doc)
+        catalog.write_index_html(root)
+
     steps = len(payload["steps"])
     regions = sum(
         len(b.get("regions", []))
@@ -251,6 +261,8 @@ def main() -> int:
     print(f"{out}")
     print(f"{steps} steps, {files} file views, {regions} highlighted regions, "
           f"{len(warnings)} warning(s)")
+    if not args.out:
+        print(f"index: {catalog.folder_for(root) / 'index.html'}")
     return 0
 
 

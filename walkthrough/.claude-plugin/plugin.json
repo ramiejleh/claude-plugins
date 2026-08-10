@@ -1,6 +1,6 @@
 {
   "name": "walkthrough",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Turns a feature into a paginated HTML walkthrough you read like a book \u2014 real code excerpts in execution order, one step per page, with the explanation for each hidden behind a click so you read the code and form your own understanding first.",
   "author": {
     "name": "Rami Ejleh",
@@ -20,7 +20,9 @@
     "syntax-highlighting"
   ],
   "commands": [
-    "./commands/walkthrough.md"
+    "./commands/walkthrough.md",
+    "./commands/list.md",
+    "./commands/refresh.md"
   ],
   "skills": [
     "./skills/authoring-walkthroughs"

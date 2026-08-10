@@ -61,6 +61,14 @@ Never the same file twice on a page.
 Your position is remembered. **Revealed explanations are not** — a second pass
 should test you again.
 
+## Commands
+
+| Command | Does |
+| --- | --- |
+| `/walkthrough <target>` | Build one. `/walkthrough the auth of this application` |
+| `/walkthrough:list` | What exists, and whether the code it explains has changed |
+| `/walkthrough:refresh <id>` | Rebuild one, re-tracing it if the code moved on |
+
 ## Install
 
 ```
@@ -84,9 +92,30 @@ infrastructure, config and docs are all fair game.
 
 ## Output
 
-`.walkthroughs/<id>.html` in the repo, gitignored on first run. They accumulate,
-which is deliberate — a growing set of explanations of your own system is worth
-more than any single one of them.
+```
+.walkthroughs/
+├── index.html      # browsable list of everything, with freshness
+├── index.json      # metadata + the file hashes staleness is measured against
+├── auth.html       # the walkthrough
+└── auth.json       # its source, so it can be edited and rebuilt
+```
+
+Gitignored on first run. They accumulate, which is deliberate — a growing set of
+explanations of your own system is worth more than any single one.
+
+## Staleness
+
+Every render records a content hash of each file it cites. `/walkthrough:list`
+re-hashes them and flags any walkthrough whose code has moved on.
+
+This matters more than it sounds. A walkthrough pointing at the wrong lines is
+worse than no walkthrough, because the reader learns a wrong map and has no
+reason to doubt it. So a stale one wants **regenerating**, not re-rendering —
+re-rendering just draws the old line numbers against new code.
+
+The page itself cannot tell you this. It is a `file://` document with no network
+and no filesystem access, so freshness is answered by the scripts, not the
+reader.
 
 ## How it is built
 

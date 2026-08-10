@@ -1,6 +1,6 @@
 # walkthrough — specification
 
-**Status:** draft, pre-implementation
+**Status:** implemented in 1.0.0
 **Plugin:** `walkthrough@DefyAtrophy`
 
 ## What it is
@@ -233,13 +233,19 @@ walkthrough/
 
 ## Milestones
 
-- **0.1.0** — JSON contract, validator, renderer, `/walkthrough` with outline
-  confirmation. Single walkthrough, keyboard nav, hidden bubbles.
-- **0.2.0** — TOC, position persistence, theming, `/walkthrough:list` and index.
-- **0.3.0** — staleness detection (hash files at render; flag when a walkthrough
-  no longer matches the tree) and a `refresh` path.
-- **Later** — programmatic entry from a recorded change set; completion code the
-  page emits on reaching the last step.
+- ~~**0.1.0**~~ — JSON contract, validator, renderer, `/walkthrough` with outline
+  confirmation. Keyboard nav, hidden bubbles. **Done.**
+- ~~**0.2.0**~~ — TOC, position persistence, theming, `/walkthrough:list` and
+  index page. **Done.** One-file-view-per-file with collapsed gaps landed here
+  too, replacing the original one-card-per-excerpt model.
+- ~~**0.3.0**~~ — staleness detection and a `refresh` path. **Done.** Each render
+  records a content hash per cited file; `list` and `check` compare against the
+  tree. Note the correction to the original design: the page **cannot** warn on
+  open, because a `file://` document can read neither the filesystem nor the
+  network. Freshness is answered by the scripts instead.
+- **Later, not built** — programmatic entry from a recorded change set (waits on
+  review-gate's ordered change log, which does not exist yet); completion code
+  the page emits on reaching the last step.
 
 ---
 

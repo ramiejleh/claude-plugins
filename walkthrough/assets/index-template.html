@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Walkthroughs</title>
+<style>
+/*__TOKENS__*/
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main { max-width: 60ch; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+
+h1 {
+  margin: 0;
+  font: 400 2rem/1.2 ui-serif, Georgia, "Times New Roman", serif;
+  letter-spacing: -0.02em;
+}
+
+.summary {
+  margin: 0.4rem 0 2.25rem;
+  color: var(--ink-faint);
+  font-size: 0.82rem;
+}
+
+.card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 1.1rem 1.25rem;
+  margin-bottom: 0.85rem;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-1px); }
+
+.card h2 {
+  margin: 0;
+  font: 600 1.05rem/1.35 ui-sans-serif, -apple-system, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+.card .sub {
+  margin: 0.25rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.88rem;
+}
+.card .sub:empty { display: none; }
+
+.card .meta {
+  margin: 0.65rem 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  font-size: 0.74rem;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Stale is a warning, not an error — the walkthrough still reads, its line
+   numbers just may not point where they did. */
+.card.is-stale { border-left: 3px solid var(--focus-edge); }
+.drift {
+  margin: 0.6rem 0 0;
+  font: 0.74rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--focus-edge);
+  overflow-wrap: anywhere;
+}
+
+.empty { color: var(--ink-soft); }
+code {
+  font: 0.85em ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--code-bg);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+
+footer {
+  margin-top: 2.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.72rem;
+  color: var(--ink-faint);
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>Walkthroughs</h1>
+  <p class="summary">__SUMMARY__</p>
+  __CARDS__
+  <footer>
+    Freshness checked __CHECKED__. Re-check with <code>/walkthrough:list</code> —
+    this page cannot read the filesystem on its own.
+  </footer>
+</main>
+</body>
+</html>

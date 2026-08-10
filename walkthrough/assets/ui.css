@@ -2,54 +2,6 @@
    Layout is a fixed column with the pager pinned to the bottom, so turning a
    page feels like turning a page rather than scrolling a feed. */
 
-:root {
-  --bg: #fbfaf8;
-  --surface: #ffffff;
-  --ink: #1b1a18;
-  --ink-soft: #57534e;
-  --ink-faint: #8b857d;
-  --rule: #e5e1da;
-  --focus-bg: #fff8e1;
-  --focus-edge: #e0a800;
-  --accent: #7c4dff;
-  --accent-soft: #f0ebff;
-  --code-bg: #fcfcfb;
-  --dim: 0.42;
-  --measure: 68ch;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #16151a;
-    --surface: #1d1c22;
-    --ink: #ece9e4;
-    --ink-soft: #b3ada4;
-    --ink-faint: #7e7871;
-    --rule: #2f2d35;
-    --focus-bg: #2c2717;
-    --focus-edge: #b8860b;
-    --accent: #b39aff;
-    --accent-soft: #292440;
-    --code-bg: #1a191f;
-    --dim: 0.38;
-  }
-}
-
-:root[data-theme="light"] {
-  --bg: #fbfaf8; --surface: #fff; --ink: #1b1a18; --ink-soft: #57534e;
-  --ink-faint: #8b857d; --rule: #e5e1da; --focus-bg: #fff8e1;
-  --focus-edge: #e0a800; --accent: #7c4dff; --accent-soft: #f0ebff;
-  --code-bg: #fcfcfb; --dim: 0.42;
-}
-:root[data-theme="dark"] {
-  --bg: #16151a; --surface: #1d1c22; --ink: #ece9e4; --ink-soft: #b3ada4;
-  --ink-faint: #7e7871; --rule: #2f2d35; --focus-bg: #2c2717;
-  --focus-edge: #b8860b; --accent: #b39aff; --accent-soft: #292440;
-  --code-bg: #1a191f; --dim: 0.38;
-}
-
-* { box-sizing: border-box; }
-
 body {
   margin: 0;
   background: var(--bg);
