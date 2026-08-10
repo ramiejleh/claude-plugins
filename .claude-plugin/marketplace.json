@@ -29,6 +29,27 @@
         "syntax-highlighting",
         "code-insights"
       ]
+    },
+    {
+      "name": "review-gate",
+      "source": "./review-gate",
+      "description": "Blocks Claude's write tools once it has generated more code than you have reviewed. A hook counts the lines and, at a strict (150) / medium (400) / loose (1000) threshold, plants a marker comment in your source that only you can delete — Claude's editing tools and shell are blocked while it is armed — then asks you a question about the changes. Writing resumes when both clear. Applies to every project and session; there is no skip command.",
+      "version": "1.0.0",
+      "author": {
+        "name": "Rami Ejleh",
+        "url": "https://github.com/ramiejleh"
+      },
+      "license": "MIT",
+      "keywords": [
+        "code-review",
+        "hooks",
+        "guardrails",
+        "oversight",
+        "checkpoint",
+        "human-in-the-loop",
+        "review",
+        "vibe-coding"
+      ]
     }
   ]
 }

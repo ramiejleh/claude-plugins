@@ -1,0 +1,30 @@
+{
+  "name": "review-gate",
+  "version": "1.0.0",
+  "description": "Blocks Claude's write tools once it has generated more code than you have reviewed. A hook counts the lines, plants a marker in your source you have to delete, and asks you a question about the changes before writing resumes.",
+  "author": {
+    "name": "Rami Ejleh",
+    "url": "https://github.com/ramiejleh"
+  },
+  "homepage": "https://github.com/ramiejleh/claude-plugins/tree/main/review-gate",
+  "repository": "https://github.com/ramiejleh/claude-plugins",
+  "license": "MIT",
+  "keywords": [
+    "code-review",
+    "hooks",
+    "guardrails",
+    "oversight",
+    "checkpoint",
+    "human-in-the-loop",
+    "review",
+    "vibe-coding"
+  ],
+  "commands": [
+    "./commands/status.md",
+    "./commands/level.md",
+    "./commands/review.md"
+  ],
+  "skills": [
+    "./skills/review-gate"
+  ]
+}
