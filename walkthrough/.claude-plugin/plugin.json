@@ -1,7 +1,7 @@
 {
   "name": "walkthrough",
-  "version": "0.1.0",
-  "description": "Turns a feature into a paginated HTML walkthrough you read like a book — real code excerpts in execution order, one step per page, with the explanation for each hidden behind a click so you read the code and form your own understanding first.",
+  "version": "0.2.0",
+  "description": "Turns a feature into a paginated HTML walkthrough you read like a book \u2014 real code excerpts in execution order, one step per page, with the explanation for each hidden behind a click so you read the code and form your own understanding first.",
   "author": {
     "name": "Rami Ejleh",
     "url": "https://github.com/ramiejleh"

@@ -55,7 +55,7 @@
       "name": "walkthrough",
       "source": "./walkthrough",
       "description": "Turns a feature into a paginated HTML walkthrough you read like a book. `/walkthrough the auth of this application` traces the flow, then builds a self-contained page: one step per page, real code excerpts in execution order with the relevant lines highlighted, and the explanation for each hidden behind a click \u2014 so you read the code and form your own understanding before checking it. Works on any existing code, whoever wrote it and whenever.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "author": {
         "name": "Rami Ejleh",
         "url": "https://github.com/ramiejleh"

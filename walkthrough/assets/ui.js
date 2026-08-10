@@ -13,6 +13,7 @@
   var app = document.getElementById("app");
   var current = 0;
   var seen = {};
+  var reveals = [];
   var storeKey = "walkthrough:" + doc.id;
 
   var el = {
@@ -87,7 +88,87 @@
     return lines;
   }
 
-  function renderExcerpt(ex, index) {
+  function codeRow(no, markup, inFocus) {
+    var row = document.createElement("div");
+    row.className = "row " + (inFocus ? "is-focus" : "is-context");
+
+    var gutter = document.createElement("span");
+    gutter.className = "ln";
+    gutter.textContent = String(no);
+
+    var src = document.createElement("span");
+    src.className = "src hljs";
+    src.innerHTML = markup === "" ? "&nbsp;" : markup;
+
+    row.appendChild(gutter);
+    row.appendChild(src);
+    return row;
+  }
+
+  /* A run of code, with a reveal placed directly beneath each highlighted
+   * region rather than at the bottom of the file. The explanation belongs next
+   * to the lines it explains — at the foot of a long view it would be attached
+   * to nothing in particular. */
+  function renderBlock(block, lang, counter) {
+    var frag = document.createDocumentFragment();
+    var markup = splitLines(highlight(block.lines.join("\n"), lang));
+
+    block.lines.forEach(function (_, i) {
+      var no = block.first + i;
+      var region = null;
+      for (var r = 0; r < block.regions.length; r++) {
+        if (no >= block.regions[r].focus[0] && no <= block.regions[r].focus[1]) {
+          region = block.regions[r];
+          break;
+        }
+      }
+      frag.appendChild(codeRow(no, markup[i], !!region));
+
+      if (region && no === region.focus[1]) {
+        var n = counter.next();
+        var bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = region.bubble;
+        bubble.hidden = true;
+
+        var reveal = document.createElement("button");
+        reveal.className = "reveal";
+        reveal.type = "button";
+        reveal.innerHTML = '<span class="pip">' + n + "</span>";
+        reveal.appendChild(document.createTextNode("What does this do?"));
+        reveal.addEventListener("click", function () {
+          bubble.hidden = !bubble.hidden;
+          reveal.lastChild.nodeValue = bubble.hidden ? "What does this do?" : "Hide";
+        });
+
+        counter.buttons.push(reveal);
+        frag.appendChild(reveal);
+        frag.appendChild(bubble);
+      }
+    });
+    return frag;
+  }
+
+  /* Skipped lines stay one click away. Hiding them keeps the page readable;
+   * removing them would mean the walkthrough decides what you are allowed to
+   * see, which is the opposite of the point. */
+  function renderGap(block, lang) {
+    var bar = document.createElement("button");
+    bar.className = "gap";
+    bar.type = "button";
+    bar.textContent = "⋯ " + block.count + " line" + (block.count === 1 ? "" : "s") + " hidden";
+    bar.addEventListener("click", function () {
+      var markup = splitLines(highlight(block.lines.join("\n"), lang));
+      var frag = document.createDocumentFragment();
+      block.lines.forEach(function (_, i) {
+        frag.appendChild(codeRow(block.first + i, markup[i], false));
+      });
+      bar.parentNode.replaceChild(frag, bar);
+    });
+    return bar;
+  }
+
+  function renderFile(file, counter) {
     var wrap = document.createElement("section");
     wrap.className = "excerpt";
 
@@ -97,11 +178,10 @@
     var path = document.createElement("button");
     path.className = "excerpt-path";
     path.type = "button";
-    path.textContent = ex.path;
+    path.textContent = file.path;
     path.title = "Copy path";
     path.addEventListener("click", function () {
-      var value = ex.path;
-      if (navigator.clipboard) navigator.clipboard.writeText(value);
+      if (navigator.clipboard) navigator.clipboard.writeText(file.path);
       var was = path.textContent;
       path.textContent = "copied";
       setTimeout(function () { path.textContent = was; }, 900);
@@ -109,55 +189,20 @@
 
     var lines = document.createElement("span");
     lines.className = "excerpt-lines";
-    lines.textContent = ex.focus[0] === ex.focus[1]
-      ? "line " + ex.focus[0]
-      : "lines " + ex.focus[0] + "–" + ex.focus[1];
+    lines.textContent = "lines " + file.span[0] + "–" + file.span[1];
 
     head.appendChild(path);
     head.appendChild(lines);
     wrap.appendChild(head);
 
-    var whole = splitLines(highlight(ex.lines.join("\n"), ex.lang));
-
     var code = document.createElement("div");
     code.className = "code";
-    ex.lines.forEach(function (_, i) {
-      var no = ex.first + i;
-      var inFocus = no >= ex.focus[0] && no <= ex.focus[1];
-      var row = document.createElement("div");
-      row.className = "row " + (inFocus ? "is-focus" : "is-context");
-
-      var gutter = document.createElement("span");
-      gutter.className = "ln";
-      gutter.textContent = String(no);
-
-      var src = document.createElement("span");
-      src.className = "src hljs";
-      src.innerHTML = whole[i] === "" ? "&nbsp;" : whole[i];
-
-      row.appendChild(gutter);
-      row.appendChild(src);
-      code.appendChild(row);
+    file.blocks.forEach(function (block) {
+      code.appendChild(
+        block.kind === "gap" ? renderGap(block, file.lang) : renderBlock(block, file.lang, counter)
+      );
     });
     wrap.appendChild(code);
-
-    var bubble = document.createElement("div");
-    bubble.className = "bubble";
-    bubble.textContent = ex.bubble;
-    bubble.hidden = true;
-
-    var reveal = document.createElement("button");
-    reveal.className = "reveal";
-    reveal.type = "button";
-    reveal.innerHTML = '<span class="pip">' + (index + 1) + "</span>";
-    reveal.appendChild(document.createTextNode("What does this do?"));
-    reveal.addEventListener("click", function () {
-      bubble.hidden = !bubble.hidden;
-      reveal.lastChild.nodeValue = bubble.hidden ? "What does this do?" : "Hide";
-    });
-
-    wrap.appendChild(reveal);
-    wrap.appendChild(bubble);
     return wrap;
   }
 
@@ -170,10 +215,14 @@
     el.stepNote.textContent = step.note || "";
     el.stepNote.hidden = !step.note;
 
+    // Reveals are numbered across the whole step so the 1–9 shortcuts line up
+    // with what the reader sees top to bottom, regardless of file boundaries.
+    var counter = { n: 0, buttons: [], next: function () { return ++this.n; } };
     el.excerpts.textContent = "";
-    step.excerpts.forEach(function (ex, i) {
-      el.excerpts.appendChild(renderExcerpt(ex, i));
+    step.files.forEach(function (file) {
+      el.excerpts.appendChild(renderFile(file, counter));
     });
+    reveals = counter.buttons;
 
     el.prev.disabled = current === 0;
     el.next.disabled = current === doc.steps.length - 1;
@@ -245,9 +294,8 @@
     else if (e.key === "t") { el.toc.hidden = !el.toc.hidden; }
     else if (e.key === "Escape") { el.toc.hidden = true; }
     else if (/^[1-9]$/.test(e.key)) {
-      var buttons = el.excerpts.querySelectorAll(".reveal");
-      var target = buttons[Number(e.key) - 1];
-      if (target) target.click();
+      var target = reveals[Number(e.key) - 1];
+      if (target) { target.click(); target.scrollIntoView({ block: "nearest" }); }
     }
   });
 

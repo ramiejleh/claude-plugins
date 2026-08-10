@@ -117,6 +117,24 @@ cold.
 - **Under 60 words.** The validator warns past that. A long bubble is a step that
   should have been two.
 
+## Several regions of the same file
+
+Excerpts sharing a path inside one step are rendered as **one continuous file
+view** with each region highlighted in place. Regions close together sit in the
+same run of code; the stretch between distant ones collapses to a `⋯ N lines
+hidden` seam the reader can open. You never get the same file twice on a page.
+
+That makes the choice a question about meaning, not layout:
+
+- **Two regions, one step** when they are a single idea that happens to live in
+  two places — a guard and the branch it protects, a queue and its drain.
+- **Two steps** when they are two ideas. The file view stays continuous either
+  way, so the next step simply highlights the next section. Splitting costs you
+  nothing and gives the reader a page per idea.
+
+Ordering within a file is by line number, not by the order you list them, since
+the merged view has to read top to bottom.
+
 ## Excerpt discipline
 
 - **Focus tightly.** The `focus` range is the lines this step is *about*; context

@@ -28,24 +28,28 @@ first, the machine confirms second.
 │  STEP 4 OF 11                                     │
 │  Where the token gets refreshed                   │
 ├──────────────────────────────────────────────────┤
-│  src/auth/session.ts                      42–58   │
+│  src/auth/session.ts                      42–91   │
 │    42   const stale = Date.now() > exp - SKEW;    │
 │  ▸ 44   if (stale) await refresh(token);          │
 │  ▸ 45     queue.flush();                          │
+│  ① What does this do?                             │
 │    47   return session;                           │
-│  ① What does this do?                             │
-├──────────────────────────────────────────────────┤
-│  src/auth/refresh.ts                      11–19   │
-│  ▸ 13   const next = await api.rotate(token);     │
-│  ① What does this do?                             │
+│         ⋯ 31 lines hidden                         │
+│    86   async function drain(queue) {             │
+│  ▸ 88     for (const job of queue) await job();   │
+│  ② What does this do?                             │
 ├──────────────────────────────────────────────────┤
 │  ◀ prev              ●●●●○○○○○○○           next ▶ │
 └──────────────────────────────────────────────────┘
 ```
 
 Highlighted lines are the step; the dimmed lines around them are context. A step
-can span several files, because the interesting moments are usually the ones that
-cross a boundary.
+can highlight several places at once — the interesting moments are usually the
+ones that cross a boundary.
+
+When two of them are in the **same file**, you get one continuous file view with
+both highlighted and the stretch between them collapsed to a seam you can open.
+Never the same file twice on a page.
 
 | Key | Does |
 | --- | --- |

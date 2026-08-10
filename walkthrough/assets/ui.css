@@ -208,8 +208,29 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .src { white-space: pre; padding-right: 1rem; }
 
+/* ---------- collapsed stretches ---------- */
+
+/* Skipped lines read as a seam in the file, not as a control. Full width so the
+   file still scans as one continuous thing rather than as separate cards. */
+.gap {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-top: 1px dashed var(--rule);
+  border-bottom: 1px dashed var(--rule);
+  background: var(--code-bg);
+  padding: 0.4rem 0.85rem;
+  border-radius: 0;
+  font: 0.72rem/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--ink-faint);
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.gap:hover { color: var(--accent); background: var(--accent-soft); }
+
 /* ---------- the bubble ---------- */
 
+/* Sits directly under the lines it explains, inside the file view. */
 .reveal {
   display: flex;
   align-items: center;
@@ -234,12 +255,16 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .bubble {
   padding: 0.85rem 0.95rem 0.95rem 1.05rem;
   border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
   background: var(--accent-soft);
-  font-size: 0.92rem;
-  line-height: 1.65;
+  font: 0.92rem/1.65 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--ink);
 }
 .bubble[hidden] { display: none; }
+/* The reveal and its bubble interrupt the code, so the run below them needs a
+   visible restart or the file looks like it ends there. */
+.reveal + .bubble + .row,
+.reveal + .row { border-top: 1px solid var(--rule); }
 
 /* ---------- pager ---------- */
 

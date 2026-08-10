@@ -25,6 +25,9 @@ from validate import validate  # noqa: E402
 
 ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
+# Gaps shorter than this are shown rather than collapsed.
+GAP_MIN = 4
+
 # Extension -> highlight.js language. Anything unmapped renders unhighlighted,
 # which is a cosmetic loss rather than a failure.
 LANGUAGES = {
@@ -64,32 +67,94 @@ def git_commit(root: Path) -> str:
         return ""
 
 
-def build_excerpt(excerpt: dict, root: Path) -> dict:
-    """Pull the real lines around the focus range, with context either side."""
-    path = (root / excerpt["path"]).resolve()
+def build_file_view(rel_path: str, entries: list[dict], root: Path) -> dict:
+    """One continuous view of a file, with every region this step highlights.
+
+    Several regions of the same file belong in one view, not one card each — a
+    step that shows the same file twice stops reading like a file and starts
+    reading like a slide deck. Regions close together merge; the stretches
+    between distant ones collapse into a gap the reader can open.
+    """
+    path = (root / rel_path).resolve()
     # The validator already rejects paths outside the root, but re-checking here
     # keeps the guarantee inside the function that does the reading rather than
     # resting on a caller in another module having run first.
     try:
         path.relative_to(root.resolve())
     except ValueError:
-        raise ValueError(f"excerpt path escapes the project root: {excerpt['path']}")
-    text = path.read_text(errors="ignore")
-    all_lines = text.splitlines()
-    start, end = excerpt["focus"]
-    context = excerpt.get("context", 5)
+        raise ValueError(f"excerpt path escapes the project root: {rel_path}")
 
-    first = max(1, start - context)
-    last = min(len(all_lines), end + context)
+    all_lines = path.read_text(errors="ignore").splitlines()
+    total = len(all_lines)
+
+    windows = []
+    for entry in entries:
+        start, end = entry["focus"]
+        context = entry.get("context", 5)
+        windows.append({
+            "start": max(1, start - context),
+            "end": min(total, end + context),
+            "region": {"focus": [start, end], "bubble": entry["bubble"]},
+        })
+    windows.sort(key=lambda w: (w["start"], w["end"]))
+
+    merged: list[dict] = []
+    for window in windows:
+        # A gap shorter than GAP_MIN is not worth hiding — "3 lines hidden"
+        # costs the reader more than the three lines would have.
+        if merged and window["start"] <= merged[-1]["end"] + GAP_MIN:
+            merged[-1]["end"] = max(merged[-1]["end"], window["end"])
+            merged[-1]["regions"].append(window["region"])
+        else:
+            merged.append({
+                "start": window["start"],
+                "end": window["end"],
+                "regions": [window["region"]],
+            })
+
+    blocks: list[dict] = []
+    previous_end = None
+    for block in merged:
+        if previous_end is not None and block["start"] > previous_end + 1:
+            first, last = previous_end + 1, block["start"] - 1
+            blocks.append({
+                "kind": "gap",
+                "first": first,
+                "count": last - first + 1,
+                "lines": all_lines[first - 1 : last],
+            })
+        blocks.append({
+            "kind": "code",
+            "first": block["start"],
+            "lines": all_lines[block["start"] - 1 : block["end"]],
+            "regions": block["regions"],
+        })
+        previous_end = block["end"]
 
     return {
-        "path": excerpt["path"],
+        "path": rel_path,
         "abs": str(path),
         "lang": language_for(path),
-        "first": first,
-        "focus": [start, end],
-        "lines": all_lines[first - 1 : last],
-        "bubble": excerpt["bubble"],
+        "span": [merged[0]["start"], merged[-1]["end"]] if merged else [0, 0],
+        "blocks": blocks,
+    }
+
+
+def build_step(step: dict, root: Path) -> dict:
+    """Group a step's excerpts by file, keeping the author's file order."""
+    grouped: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for excerpt in step["excerpts"]:
+        path = excerpt["path"]
+        if path not in grouped:
+            grouped[path] = []
+            order.append(path)
+        grouped[path].append(excerpt)
+
+    return {
+        "title": step["title"],
+        "note": step.get("note", ""),
+        "files": [build_file_view(path, grouped[path], root) for path in order],
     }
 
 
@@ -102,14 +167,7 @@ def build_payload(doc: dict, root: Path) -> dict:
         "commit": doc.get("commit") or git_commit(root),
         "generated_at": doc.get("generated_at")
         or datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "steps": [
-            {
-                "title": step["title"],
-                "note": step.get("note", ""),
-                "excerpts": [build_excerpt(x, root) for x in step["excerpts"]],
-            }
-            for step in doc["steps"]
-        ],
+        "steps": [build_step(step, root) for step in doc["steps"]],
     }
 
 
@@ -185,9 +243,14 @@ def main() -> int:
     out.write_text(render(payload))
 
     steps = len(payload["steps"])
-    excerpts = sum(len(s["excerpts"]) for s in payload["steps"])
+    regions = sum(
+        len(b.get("regions", []))
+        for s in payload["steps"] for f in s["files"] for b in f["blocks"]
+    )
+    files = sum(len(s["files"]) for s in payload["steps"])
     print(f"{out}")
-    print(f"{steps} steps, {excerpts} excerpts, {len(warnings)} warning(s)")
+    print(f"{steps} steps, {files} file views, {regions} highlighted regions, "
+          f"{len(warnings)} warning(s)")
     return 0
 
 
