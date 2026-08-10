@@ -82,21 +82,20 @@ highlights, and annotates it — it never rewrites the code under review.
 Add the marketplace once, then install the plugin from it:
 
 ```
-/plugin marketplace add ramiejleh/claude-plugins
-/plugin install interactive-pr-review@ramiejleh-plugins
+/plugin marketplace add ramiejleh/DefyAtrophy
+/plugin install interactive-pr-review@DefyAtrophy
 ```
 
 To pick up a newer version after one is published:
 
 ```
-/plugin marketplace update ramiejleh-plugins                 # refresh the marketplace listing
-/plugin install interactive-pr-review@ramiejleh-plugins      # reinstall at the new version
+/plugin marketplace update DefyAtrophy                 # refresh the marketplace listing
+/plugin install interactive-pr-review@DefyAtrophy      # reinstall at the new version
 ```
 
-> You **add** by `owner/repo` (`ramiejleh/claude-plugins`) but **install/update** by the
-> marketplace's registered *name* (`ramiejleh-plugins`, the `name` field in
-> `marketplace.json`). They differ because Claude Code reserves the `claude-` prefix for
-> official marketplaces, so the name can't match the repo here.
+> You **add** by `owner/repo` and **install/update** by the marketplace's registered
+> *name* — the `name` field in `marketplace.json`. Here both are `DefyAtrophy`, so the
+> commands read the same either way.
 
 ### From a local checkout (development)
 
@@ -107,11 +106,11 @@ takes a name and only `marketplace add` takes a path:
 
 ```
 /plugin marketplace add /absolute/path/to/this/repo
-/plugin install interactive-pr-review@ramiejleh-plugins
+/plugin install interactive-pr-review@DefyAtrophy
 ```
 
 A local marketplace whose `name` matches one you already have replaces that entry, so the
-checkout takes over; re-add `ramiejleh/claude-plugins` to switch back. After editing
+checkout takes over; re-add `ramiejleh/DefyAtrophy` to switch back. After editing
 `commands/` or `hooks/`, run `/reload-plugins` to pick the change up — skill files are re-read
 live.
 

@@ -1,4 +1,4 @@
-# ramiejleh-plugins
+# DefyAtrophy
 
 A [Claude Code](https://docs.claude.com/en/docs/claude-code) plugin marketplace by
 [Rami Ejleh](https://github.com/ramiejleh). Add it once, then install any plugin listed
@@ -14,28 +14,27 @@ below from inside Claude Code.
 ## Add the marketplace
 
 ```
-/plugin marketplace add ramiejleh/claude-plugins
+/plugin marketplace add ramiejleh/DefyAtrophy
 ```
 
 ## Install a plugin
 
 ```
-/plugin install interactive-pr-review@ramiejleh-plugins
+/plugin install interactive-pr-review@DefyAtrophy
 /reload-plugins
 ```
 
-> You **add** the marketplace by `owner/repo` (`ramiejleh/claude-plugins`) but **install**
-> from its registered *name* (`ramiejleh-plugins`, the `name` field in `marketplace.json`).
-> They differ because Claude Code reserves the `claude-` prefix for official marketplaces,
-> so the name can't match the repo here.
+> You **add** the marketplace by `owner/repo` and **install** from its registered
+> *name* — the `name` field in `marketplace.json`. Here both are `DefyAtrophy`, so
+> the two commands read the same either way.
 
 ## Update
 
 To pick up a newer version after one is published:
 
 ```
-/plugin marketplace update ramiejleh-plugins       # refresh the listing
-/plugin install interactive-pr-review@ramiejleh-plugins
+/plugin marketplace update DefyAtrophy       # refresh the listing
+/plugin install interactive-pr-review@DefyAtrophy
 ```
 
 ## Repository structure

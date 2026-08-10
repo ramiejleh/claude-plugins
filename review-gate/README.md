@@ -83,8 +83,8 @@ passed gate.
 ## Install
 
 ```
-/plugin marketplace add ramiejleh/claude-plugins
-/plugin install review-gate@ramiejleh-plugins
+/plugin marketplace add ramiejleh/DefyAtrophy
+/plugin install review-gate@DefyAtrophy
 /reload-plugins
 ```
 

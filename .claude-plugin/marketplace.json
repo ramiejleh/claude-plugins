@@ -1,12 +1,12 @@
 {
-  "name": "ramiejleh-plugins",
+  "name": "DefyAtrophy",
   "owner": {
     "name": "Rami Ejleh",
     "url": "https://github.com/ramiejleh"
   },
   "metadata": {
-    "description": "Rami Ejleh's Claude Code plugins, installable from the ramiejleh/claude-plugins GitHub repo.",
-    "version": "1.0.0"
+    "description": "Claude Code plugins by Rami Ejleh that keep a human in the loop as the machine speeds up — installable from the ramiejleh/DefyAtrophy GitHub repo.",
+    "version": "1.1.0"
   },
   "plugins": [
     {
