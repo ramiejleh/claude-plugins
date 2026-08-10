@@ -1,12 +1,14 @@
 ---
-description: Show how much code Claude has written since the last review gate, how many lines are left before the next one fires, which files were touched, and whether a gate is currently armed.
+description: Show how much unreviewed code has built up in this project, how many lines are left before the next gate fires, which files changed, and whether a gate is currently armed.
 argument-hint: (no arguments)
 allowed-tools: Bash
 ---
 
 # Review gate status
 
-Report where the current session stands against the review threshold.
+Report where this project stands against the review threshold. The count is
+per project and carries across conversations, so it is not the current session's
+number — it is everything unreviewed in the repo.
 
 Run:
 

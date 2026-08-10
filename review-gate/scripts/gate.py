@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 """review-gate — force periodic human review of Claude-generated code.
 
-Claude Code runs this as a hook. It tallies how many lines Claude has written
-in the current session and, once that crosses the configured threshold, denies
-every further write until a human has actually looked at the code.
+Claude Code runs this as a hook. It measures how much unreviewed code has piled
+up in the current project and, once that crosses the configured threshold, denies
+every further write until a human has actually looked at it.
 
-The gate has two stages:
+Two things have to happen before writing resumes, every time:
 
-  1. marker  — a comment line carrying a random token is planted in one of the
-               changed files. It clears when that token is gone from disk.
-               This stage is the load-bearing one: the script verifies it by
-               reading the file, and while a gate is armed Claude's write tools
-               and shell are blocked, so Claude cannot remove the marker itself.
+  1. markers — a comment line carrying a random token is planted in each of the
+               files that changed most. They clear when every token is gone from
+               disk. The script verifies this by reading the files, and while a
+               gate is armed Claude's write tools and shell are blocked, so
+               Claude cannot remove them itself.
   2. quiz    — Claude poses a comprehension question about the changes and the
-               human answers it. The answer is checked against a stored hash.
+               human answers it. The question must be registered before the
+               markers clear, so it cannot be retro-fitted to something the user
+               already said.
 
-Subcommands are split into hook entry points (fed JSON on stdin by Claude Code)
-and a small CLI used by the slash commands and by Claude during a gate.
+Counting is per *project*, not per session, and survives across conversations:
+unreviewed code accumulates the way the risk does, and starting a fresh session
+does not wipe the slate. Where the project is a git repo the authoritative number
+comes from the working tree rather than from a tally of tool calls, so code
+written by a subagent or a shell heredoc counts too.
+
+Subcommands split into hook entry points (fed JSON on stdin by Claude Code) and a
+small CLI used by the slash commands and by Claude during a gate.
 """
 
 from __future__ import annotations
@@ -24,12 +32,12 @@ from __future__ import annotations
 import argparse
 import difflib
 import fnmatch
-import hashlib
 import json
 import os
 import re
 import secrets
 import shlex
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -41,12 +49,12 @@ CONFIG_PATH = HOME / "config.json"
 LOG_PATH = HOME / "log.jsonl"
 
 WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+MAX_MARKERS = 5
+MAX_ATTEMPTS = 3
 
 DEFAULT_CONFIG = {
     "level": "medium",
     "thresholds": {"strict": 150, "medium": 400, "loose": 1000},
-    "quiz_enabled": True,
-    "block_bash_during_gate": True,
     "ignore_globs": [
         "**/node_modules/**",
         "**/.git/**",
@@ -100,7 +108,7 @@ FALLBACK_MARKER_NAME = "REVIEW-GATE.txt"
 
 
 # --------------------------------------------------------------------------
-# config + state
+# config
 # --------------------------------------------------------------------------
 
 
@@ -137,59 +145,179 @@ def threshold_for(cfg: dict) -> int:
         return DEFAULT_CONFIG["thresholds"]["medium"]
 
 
-def state_path(session_id: str) -> Path:
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id or "unknown")
-    return STATE_DIR / f"{safe}.json"
+def dwell_for(lines: int) -> int:
+    """Minimum seconds a gate stays shut, scaled to how much there is to read.
 
-
-def resolve_session(explicit: str | None) -> str | None:
-    """Find which session's state to operate on.
-
-    Hooks always know the session id. The CLI subcommands Claude runs during a
-    gate do not, so they fall back to an env var exported at SessionStart and
-    finally to the most recently touched state file.
+    Not a security control — it only rules out the clear that happens so fast
+    nobody could have opened the file.
     """
-    if explicit:
-        return explicit
-    env = os.environ.get("REVIEW_GATE_SESSION")
-    if env:
-        return env
+    return min(300, max(30, lines // 4))
+
+
+# --------------------------------------------------------------------------
+# project identity + git measurement
+# --------------------------------------------------------------------------
+
+
+def run_git(root: str, *args: str) -> str | None:
     try:
-        files = sorted(STATE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
+        out = subprocess.run(
+            ["git", "-C", root, *args],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
         return None
-    return files[0].stem if files else None
+    return out.stdout if out.returncode == 0 else None
 
 
-def load_state(session_id: str) -> dict:
-    path = state_path(session_id)
+def git_root(cwd: str) -> str | None:
+    if not cwd or not Path(cwd).is_dir():
+        return None
+    out = run_git(cwd, "rev-parse", "--show-toplevel")
+    return out.strip() if out else None
+
+
+def project_for(cwd: str) -> str:
+    """The unit the counter belongs to: a git repo, else the directory."""
+    return git_root(cwd) or (cwd or os.getcwd())
+
+
+def git_head(root: str) -> str:
+    out = run_git(root, "rev-parse", "HEAD")
+    return out.strip() if out else ""
+
+
+def git_churn(root: str, cfg: dict) -> int | None:
+    """Added plus deleted lines in the working tree, versus HEAD.
+
+    This is what makes the count hard to sidestep: it measures what is actually
+    on disk, so code written through a shell heredoc or by a subagent lands in it
+    exactly like an Edit does.
+    """
+    total = 0
+    tracked = run_git(root, "diff", "--numstat", "HEAD")
+    if tracked is None:
+        # No HEAD yet (fresh repo) — everything is untracked, counted below.
+        tracked = run_git(root, "diff", "--numstat") or ""
+    for line in tracked.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            if is_ignored(str(Path(root) / parts[2]), cfg):
+                continue
+            total += int(parts[0]) + int(parts[1])
+
+    untracked = run_git(root, "ls-files", "--others", "--exclude-standard")
+    if untracked is None:
+        return None
+    for rel in untracked.splitlines():
+        path = Path(root) / rel
+        if is_ignored(str(path), cfg):
+            continue
+        try:
+            if path.stat().st_size > 2_000_000:
+                continue
+            total += len(path.read_text(errors="ignore").splitlines())
+        except (OSError, UnicodeDecodeError):
+            continue
+    return total
+
+
+def measured_lines(state: dict, cfg: dict) -> int:
+    """Authoritative unreviewed-line count for this project.
+
+    The larger of the two available signals. Git catches writes that never went
+    through a tool call; the tool tally catches projects that are not git repos,
+    and code that was generated and then reverted before anyone saw it.
+    """
+    tallied = state.get("lines_tallied", 0)
+    root = state.get("git_root")
+    if not root or not Path(root).is_dir():
+        return tallied
+
+    head = git_head(root)
+    churn = git_churn(root, cfg)
+    if churn is None:
+        return tallied
+
+    # A commit is a natural reset point, and it moves churn back to ~0. Rebase
+    # the baseline onto the new HEAD rather than letting the count go negative.
+    if state.get("baseline_head") != head:
+        state["baseline_head"] = head
+        state["baseline_churn"] = churn
+        save_state(state)
+        return tallied
+
+    return max(tallied, max(0, churn - state.get("baseline_churn", 0)))
+
+
+def rebase_baseline(state: dict, cfg: dict) -> None:
+    """Treat everything currently on disk as reviewed."""
+    state["lines_tallied"] = 0
+    state["files"] = {}
+    root = state.get("git_root")
+    if root and Path(root).is_dir():
+        churn = git_churn(root, cfg)
+        state["baseline_head"] = git_head(root)
+        state["baseline_churn"] = churn if churn is not None else 0
+
+
+# --------------------------------------------------------------------------
+# state
+# --------------------------------------------------------------------------
+
+
+def state_path(project: str) -> Path:
+    """One state file per project, keyed by a readable name plus a path digest."""
+    import hashlib as _hashlib
+
+    digest = _hashlib.sha256((project or "unknown").encode()).hexdigest()[:10]
+    label = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(project or "unknown").name)[:40] or "root"
+    return STATE_DIR / f"{label}-{digest}.json"
+
+
+def load_state(project: str) -> dict:
+    path = state_path(project)
     try:
         data = json.loads(path.read_text())
         if isinstance(data, dict):
-            data.setdefault("session_id", session_id)
-            data.setdefault("lines_since_review", 0)
+            data.setdefault("project", project)
+            data.setdefault("lines_tallied", 0)
             data.setdefault("lines_total", 0)
             data.setdefault("gates_passed", 0)
             data.setdefault("files", {})
             data.setdefault("gate", None)
+            data.setdefault("git_root", git_root(project))
             return data
     except (OSError, ValueError):
         pass
-    return {
-        "session_id": session_id,
-        "lines_since_review": 0,
+
+    # A brand-new project starts with whatever is already on disk treated as
+    # reviewed. The baseline has to be taken here rather than lazily at first
+    # measurement, or any code written in between reads as pre-existing.
+    root = git_root(project)
+    fresh = {
+        "project": project,
+        "git_root": root,
+        "lines_tallied": 0,
         "lines_total": 0,
         "gates_passed": 0,
         "files": {},
         "gate": None,
         "created_at": now_iso(),
     }
+    if root:
+        churn = git_churn(root, load_config())
+        fresh["baseline_head"] = git_head(root)
+        fresh["baseline_churn"] = churn if churn is not None else 0
+    return fresh
 
 
 def save_state(state: dict) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     state["updated_at"] = now_iso()
-    path = state_path(state["session_id"])
+    path = state_path(state["project"])
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2) + "\n")
     tmp.replace(path)
@@ -207,18 +335,8 @@ def log_event(event: str, **fields) -> None:
         pass
 
 
-def prune_state(max_age_days: int = 14) -> None:
-    cutoff = time.time() - max_age_days * 86400
-    try:
-        for path in STATE_DIR.glob("*.json"):
-            if path.stat().st_mtime < cutoff:
-                path.unlink(missing_ok=True)
-    except OSError:
-        pass
-
-
 # --------------------------------------------------------------------------
-# counting
+# tool-call tallying (the fallback signal)
 # --------------------------------------------------------------------------
 
 
@@ -232,26 +350,21 @@ def is_ignored(file_path: str, cfg: dict) -> bool:
 
 
 def count_lines(text: str) -> int:
-    if not text:
-        return 0
-    return len(text.splitlines())
+    return len(text.splitlines()) if text else 0
 
 
 def diff_size(old: str, new: str) -> int:
-    """Lines added plus lines removed between two strings."""
-    old_lines = old.splitlines()
-    new_lines = new.splitlines()
     changed = 0
-    for line in difflib.unified_diff(old_lines, new_lines, n=0, lineterm=""):
-        if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+    for line in difflib.unified_diff(old.splitlines(), new.splitlines(), n=0, lineterm=""):
+        if line.startswith(("+++", "---", "@@")):
             continue
-        if line.startswith("+") or line.startswith("-"):
+        if line.startswith(("+", "-")):
             changed += 1
     return changed
 
 
 def measure(tool_name: str, tool_input: dict) -> int:
-    """How many lines of code this tool call put into the world."""
+    """How many lines of code one tool call put into the world."""
     if tool_name == "Write":
         # A Write is the whole file. Even when it overwrites something, every
         # line in it is a line Claude just authored and the human has not read.
@@ -270,12 +383,11 @@ def measure(tool_name: str, tool_input: dict) -> int:
 
 
 # --------------------------------------------------------------------------
-# marker planting + verification
+# markers
 # --------------------------------------------------------------------------
 
 
 def comment_wrap(path: Path) -> tuple[str, str] | None:
-    """Return (prefix, suffix) for a comment in this file's language."""
     if path.name in BASENAME_COMMENT:
         return BASENAME_COMMENT[path.name], ""
     ext = path.suffix.lstrip(".").lower()
@@ -290,79 +402,108 @@ def comment_wrap(path: Path) -> tuple[str, str] | None:
     return None
 
 
-def insert_index(lines: list[str], path: Path) -> int:
-    """Where to put the marker so it does not break the file.
-
-    Shebangs, XML declarations and PHP open tags have to stay on line 1, so the
-    marker goes just below them.
-    """
+def insert_index(lines: list[str]) -> int:
+    """Shebangs, XML declarations and PHP open tags have to stay on line 1."""
     if not lines:
         return 0
     first = lines[0].lstrip()
-    if first.startswith("#!") or first.startswith("<?"):
-        return 1
-    return 0
+    return 1 if first.startswith(("#!", "<?")) else 0
 
 
-def choose_marker_file(state: dict, cfg: dict) -> Path | None:
-    """Pick the changed file with the most new code that can host a comment."""
-    ranked = sorted(state.get("files", {}).items(), key=lambda item: item[1], reverse=True)
-    for raw_path, _lines in ranked:
-        path = Path(raw_path)
-        if is_ignored(raw_path, cfg) or not path.is_file():
-            continue
-        if comment_wrap(path) is None:
-            continue
+def changed_files(state: dict, cfg: dict) -> list[str]:
+    """Files with unreviewed changes, most-changed first.
+
+    Prefers git so that files written outside a tool call are included; falls
+    back to the tally when there is no repo.
+    """
+    root = state.get("git_root")
+    ranked = [p for p, _ in sorted(state.get("files", {}).items(), key=lambda kv: -kv[1])]
+    if not root or not Path(root).is_dir():
+        return ranked
+
+    ordered: list[tuple[int, str]] = []
+    tracked = run_git(root, "diff", "--numstat", "HEAD") or ""
+    for line in tracked.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0].isdigit() and parts[1].isdigit():
+            ordered.append((int(parts[0]) + int(parts[1]), str(Path(root) / parts[2])))
+    untracked = run_git(root, "ls-files", "--others", "--exclude-standard") or ""
+    for rel in untracked.splitlines():
+        path = Path(root) / rel
         try:
-            path.read_text()
+            ordered.append((len(path.read_text(errors="ignore").splitlines()), str(path)))
         except (OSError, UnicodeDecodeError):
             continue
-        return path
-    return None
+
+    ordered.sort(reverse=True)
+    merged = [p for _, p in ordered if not is_ignored(p, cfg)]
+    for path in ranked:  # keep any tally-only files git did not report
+        if path not in merged:
+            merged.append(path)
+    return merged
 
 
-def plant_marker(state: dict, cfg: dict, cwd: str, token: str) -> tuple[Path, int, str]:
-    """Write the marker into a changed file. Returns (path, line_no, text)."""
-    target = choose_marker_file(state, cfg)
-    body = (
-        f"[REVIEW-GATE {token}] {state['lines_since_review']} lines written since your "
-        f"last review. Read the changes above, then delete this line to unblock Claude."
-    )
+def plant_markers(state: dict, cfg: dict, lines: int, token: str) -> list[dict]:
+    """Drop a marker into each of the top changed files.
 
-    if target is not None:
-        prefix, suffix = comment_wrap(target)
-        marker = f"{prefix} {body}{suffix}"
-        text = target.read_text()
-        lines = text.splitlines(keepends=True)
-        index = insert_index(lines, target)
-        newline = "\n"
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] = lines[-1] + newline
-        lines.insert(index, marker + newline)
-        target.write_text("".join(lines))
-        return target, index + 1, marker
-
-    # Nothing suitable to annotate — drop a standalone file the human deletes.
-    fallback = Path(cwd or ".") / FALLBACK_MARKER_NAME
-    marker = f"[REVIEW-GATE {token}] {body}"
-    fallback.write_text(marker + "\n")
-    return fallback, 1, marker
-
-
-def marker_present(gate: dict) -> bool:
-    """True while the token is still on disk.
-
-    Checked by reading the file rather than by trusting anything Claude says,
-    which is what makes this stage of the gate real.
+    One marker per file rather than one overall, because a single marker only
+    ever proves that one file was opened.
     """
+    body = (
+        f"[REVIEW-GATE {token}] {lines} lines of unreviewed changes in this project. "
+        f"Read them, then delete this line. Every marker must go before Claude can write again."
+    )
+    planted: list[dict] = []
+
+    for raw in changed_files(state, cfg):
+        if len(planted) >= MAX_MARKERS:
+            break
+        path = Path(raw)
+        wrap = comment_wrap(path)
+        if wrap is None or not path.is_file():
+            continue
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        prefix, suffix = wrap
+        marker = f"{prefix} {body}{suffix}"
+        file_lines = text.splitlines(keepends=True)
+        index = insert_index(file_lines)
+        if file_lines and not file_lines[-1].endswith("\n"):
+            file_lines[-1] += "\n"
+        file_lines.insert(index, marker + "\n")
+        try:
+            path.write_text("".join(file_lines))
+        except OSError:
+            continue
+        planted.append({"file": str(path), "line": index + 1})
+
+    if not planted:
+        # Nothing suitable to annotate — drop a standalone file to delete.
+        fallback = Path(state.get("project") or ".") / FALLBACK_MARKER_NAME
+        try:
+            fallback.write_text(f"[REVIEW-GATE {token}] {body}\n")
+            planted.append({"file": str(fallback), "line": 1})
+        except OSError:
+            pass
+    return planted
+
+
+def outstanding_markers(gate: dict) -> list[dict]:
+    """Markers still on disk. Read from the files, never taken on trust."""
     token = gate.get("token")
-    path = Path(gate.get("marker_file", ""))
-    if not token or not path.exists():
-        return False
-    try:
-        return token in path.read_text()
-    except (OSError, UnicodeDecodeError):
-        return False
+    if not token:
+        return []
+    remaining = []
+    for marker in gate.get("markers", []):
+        path = Path(marker.get("file", ""))
+        try:
+            if path.exists() and token in path.read_text():
+                remaining.append(marker)
+        except (OSError, UnicodeDecodeError):
+            continue
+    return remaining
 
 
 # --------------------------------------------------------------------------
@@ -370,90 +511,103 @@ def marker_present(gate: dict) -> bool:
 # --------------------------------------------------------------------------
 
 
-def file_summary(state: dict, limit: int = 12) -> str:
-    ranked = sorted(state.get("files", {}).items(), key=lambda item: item[1], reverse=True)
-    rows = [f"  {lines:>5} lines  {path}" for path, lines in ranked[:limit]]
-    if len(ranked) > limit:
-        rows.append(f"  ... and {len(ranked) - limit} more files")
-    return "\n".join(rows)
+def file_summary(state: dict, cfg: dict, limit: int = 12) -> str:
+    ranked = sorted(state.get("files", {}).items(), key=lambda kv: -kv[1])
+    if ranked:
+        rows = [f"  {n:>5} lines  {p}" for p, n in ranked[:limit]]
+        if len(ranked) > limit:
+            rows.append(f"  ... and {len(ranked) - limit} more")
+        return "\n".join(rows)
+    return "\n".join(f"  {p}" for p in changed_files(state, cfg)[:limit]) or "  (none recorded)"
 
 
-def gate_script_cmd() -> str:
+def gate_cmd() -> str:
     return f'python3 "{Path(__file__).resolve()}"'
 
 
-def armed_message(state: dict, gate: dict, cfg: dict) -> str:
-    session = state["session_id"]
-    cmd = gate_script_cmd()
-    quiz_line = ""
-    if cfg.get("quiz_enabled", True):
-        quiz_line = (
-            f"\nSTAGE 2 — comprehension question (not yet set)\n"
-            f"  Write one question about a decision or consequence in these changes,\n"
-            f"  ask the user, then register it before they answer:\n"
-            f"    {cmd} arm-quiz --session {session} \\\n"
-            f"      --question 'your question' --answer 'the answer you expect'\n"
-            f"  Submit their reply verbatim with:\n"
-            f"    {cmd} answer --session {session} 'what the user said'\n"
-        )
+def marker_list(markers: list[dict]) -> str:
+    return "\n".join(f"    {m['file']}:{m['line']}" for m in markers)
+
+
+def dwell_remaining(gate: dict) -> int:
+    try:
+        armed = datetime.fromisoformat(gate["armed_at"]).timestamp()
+    except (KeyError, ValueError):
+        return 0
+    return max(0, int(gate.get("dwell_seconds", 0) - (time.time() - armed)))
+
+
+def armed_message(state: dict, gate: dict, cfg: dict, lines: int) -> str:
+    project = state["project"]
+    cmd = gate_cmd()
     return f"""REVIEW GATE ARMED — writes and shell are blocked.
 
-{state['lines_since_review']} lines have been written since the last review, over the
+{lines} lines of unreviewed code have built up in this project, over the
 {cfg.get('level', 'medium')} threshold of {threshold_for(cfg)}. Nothing else gets written until a
-human has looked at this code.
+human has looked at it.
 
-Changed in this stretch:
-{file_summary(state)}
+This count is per project and carries across conversations, so it is not
+reset by starting a new session.
 
-STAGE 1 — planted marker
-  {gate['marker_file']}:{gate['marker_line']}
-  The user must read the changes and delete that line themselves. You cannot:
-  your write tools and shell are blocked while this gate is armed.
-{quiz_line}
-What to do now: tell the user the gate tripped, walk them through what changed
-(Read/Grep/Glob still work), and wait. Do not try to route around this."""
+Changed:
+{file_summary(state, cfg)}
+
+STAGE 1 — {len(gate['markers'])} marker(s) planted
+{marker_list(gate['markers'])}
+  The user deletes every one of them. You cannot: your write tools and shell
+  are blocked while this gate is armed.
+
+STAGE 2 — register your question NOW, before they start deleting
+  It has to be registered while the markers are still in place, so it cannot be
+  shaped around something the user has already told you:
+    {cmd} arm-quiz --project '{project}' \\
+      --question 'your question' --answer 'the answer you expect'
+  Then ask them, and submit their reply verbatim:
+    {cmd} answer --project '{project}' 'what the user said'
+
+What to do now: register the question, tell the user the gate tripped, then walk
+them through what changed (Read/Grep/Glob still work). Do not route around this."""
 
 
 def stage_message(state: dict, gate: dict, cfg: dict) -> str:
-    """What is still outstanding on an already-armed gate."""
-    session = state["session_id"]
-    cmd = gate_script_cmd()
-    still_marked = marker_present(gate)
-    quiz_on = cfg.get("quiz_enabled", True)
-    quiz_done = gate.get("quiz_passed") or not quiz_on
-
+    project = state["project"]
+    cmd = gate_cmd()
+    remaining = outstanding_markers(gate)
     parts = ["REVIEW GATE STILL ARMED — writes and shell are blocked.\n"]
 
-    if still_marked:
+    if remaining:
         parts.append(
-            f"STAGE 1 — not cleared\n"
-            f"  The marker is still in {gate['marker_file']} (line {gate['marker_line']}).\n"
-            f"  The user deletes it, not you. Help them review the changes while they do.\n"
+            f"STAGE 1 — {len(remaining)} of {len(gate.get('markers', []))} marker(s) still on disk\n"
+            f"{marker_list(remaining)}\n"
+            f"  The user deletes these, not you. Help them read the changes meanwhile.\n"
         )
     else:
-        parts.append("STAGE 1 — cleared. The marker is gone.\n")
+        parts.append("STAGE 1 — cleared. Every marker is gone.\n")
 
-    if quiz_on and not quiz_done:
-        if gate.get("question"):
-            attempts = gate.get("attempts", 0)
-            parts.append(
-                f"STAGE 2 — not cleared\n"
-                f"  Question asked: {gate['question']}\n"
-                f"  Attempts so far: {attempts}. Submit the user's reply verbatim:\n"
-                f"    {cmd} answer --session {session} 'what the user said'\n"
-            )
-        else:
-            parts.append(
-                f"STAGE 2 — no question registered yet\n"
-                f"  Ask the user one question about a decision or consequence in these\n"
-                f"  changes, then register it:\n"
-                f"    {cmd} arm-quiz --session {session} \\\n"
-                f"      --question 'your question' --answer 'the answer you expect'\n"
-            )
+    if gate.get("quiz_passed"):
+        parts.append("STAGE 2 — cleared.\n")
+    elif gate.get("question"):
+        parts.append(
+            f"STAGE 2 — not cleared\n"
+            f"  Question asked: {gate['question']}\n"
+            f"  Attempts so far: {gate.get('attempts', 0)}. Submit their reply verbatim:\n"
+            f"    {cmd} answer --project '{project}' 'what the user said'\n"
+        )
+    else:
+        parts.append(
+            f"STAGE 2 — no question registered\n"
+            f"  Register one, then ask the user:\n"
+            f"    {cmd} arm-quiz --project '{project}' \\\n"
+            f"      --question 'your question' --answer 'the answer you expect'\n"
+        )
 
-    parts.append(
-        "\nThe gate lifts on its own once both stages clear — just retry your edit then."
-    )
+    wait = dwell_remaining(gate)
+    if wait and not remaining:
+        parts.append(
+            f"\nA {gate.get('dwell_seconds')}s minimum applies to this gate ({wait}s left) — "
+            f"there is more code here than anyone reads that fast."
+        )
+    parts.append("\nThe gate lifts on its own once both stages clear — retry your edit then.")
     return "\n".join(parts)
 
 
@@ -477,18 +631,21 @@ def allow() -> int:
 def deny(reason: str) -> int:
     """Block the tool call and hand the reason back to Claude.
 
-    Both channels are used on purpose: the JSON on stdout carries the structured
+    Both channels on purpose: the JSON on stdout carries the structured
     decision, and exit code 2 guarantees the text on stderr reaches Claude.
     """
-    payload = {
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "deny",
-            "permissionDecisionReason": reason,
-        },
-        "systemMessage": reason,
-    }
-    print(json.dumps(payload))
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                },
+                "systemMessage": reason,
+            }
+        )
+    )
     print(reason, file=sys.stderr)
     return 2
 
@@ -497,130 +654,65 @@ def clear_gate(state: dict, cfg: dict) -> None:
     gate = state.get("gate") or {}
     log_event(
         "gate_passed",
-        session=state["session_id"],
-        lines=state.get("lines_since_review", 0),
-        marker_file=gate.get("marker_file"),
+        project=state["project"],
+        lines=gate.get("lines_at_arm", 0),
+        markers=len(gate.get("markers", [])),
         question=gate.get("question"),
         attempts=gate.get("attempts", 0),
+        question_committed_early=gate.get("committed_early", False),
     )
     state["gate"] = None
-    state["lines_since_review"] = 0
-    state["files"] = {}
     state["gates_passed"] = state.get("gates_passed", 0) + 1
+    rebase_baseline(state, cfg)
     save_state(state)
 
 
 def evaluate_gate(state: dict, cfg: dict) -> bool:
-    """Re-check both stages. Returns True when the gate has fully cleared."""
+    """Re-check both stages plus dwell. True when the gate has fully cleared."""
     gate = state.get("gate")
     if not gate:
         return True
-    if marker_present(gate):
+    if outstanding_markers(gate):
         return False
     if not gate.get("marker_cleared"):
         gate["marker_cleared"] = True
         gate["marker_cleared_at"] = now_iso()
         save_state(state)
-        log_event("marker_cleared", session=state["session_id"], file=gate.get("marker_file"))
-    if cfg.get("quiz_enabled", True) and not gate.get("quiz_passed"):
+        log_event("markers_cleared", project=state["project"], count=len(gate.get("markers", [])))
+    if not gate.get("quiz_passed"):
         return False
-    return True
+    return dwell_remaining(gate) == 0
 
 
-# --------------------------------------------------------------------------
-# hook entry points
-# --------------------------------------------------------------------------
-
-
-def hook_post_tool(data: dict) -> int:
-    """Tally lines after every successful write."""
-    cfg = load_config()
-    tool_name = data.get("tool_name", "")
-    if tool_name not in WRITE_TOOLS:
-        return allow()
-
-    tool_input = data.get("tool_input") or {}
-    file_path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
-    if is_ignored(file_path, cfg):
-        return allow()
-
-    lines = measure(tool_name, tool_input)
-    if lines <= 0:
-        return allow()
-
-    session = data.get("session_id") or resolve_session(None) or "unknown"
-    state = load_state(session)
-    state["lines_since_review"] = state.get("lines_since_review", 0) + lines
-    state["lines_total"] = state.get("lines_total", 0) + lines
-    state["files"][file_path] = state["files"].get(file_path, 0) + lines
-    state["cwd"] = data.get("cwd", state.get("cwd", ""))
-    save_state(state)
-
-    threshold = threshold_for(cfg)
-    current = state["lines_since_review"]
-    # A heads-up before the hard stop, so Claude can finish the unit of work it
-    # is in rather than getting cut off mid-refactor.
-    if not state.get("gate") and threshold * 0.8 <= current < threshold:
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PostToolUse",
-                        "additionalContext": (
-                            f"review-gate: {current} of {threshold} lines. The review gate "
-                            f"trips shortly — reach a coherent stopping point rather than "
-                            f"starting anything large."
-                        ),
-                    }
-                }
-            )
-        )
-    return allow()
-
-
-def hook_pre_write(data: dict) -> int:
-    """Block writes when a gate is armed, and arm one when the threshold is hit."""
-    cfg = load_config()
-    session = data.get("session_id") or resolve_session(None) or "unknown"
-    state = load_state(session)
-
-    if state.get("gate"):
-        if evaluate_gate(state, cfg):
-            clear_gate(state, cfg)
-            return allow()
-        return deny(stage_message(state, state["gate"], cfg))
-
-    if state.get("lines_since_review", 0) < threshold_for(cfg):
-        return allow()
-
-    return deny(arm_gate(state, cfg, data.get("cwd", "")))
-
-
-def arm_gate(state: dict, cfg: dict, cwd: str) -> str:
+def arm_gate(state: dict, cfg: dict, lines: int) -> str:
     token = secrets.token_hex(3)
-    path, line_no, marker_text = plant_marker(state, cfg, cwd or state.get("cwd", ""), token)
+    markers = plant_markers(state, cfg, lines, token)
     state["gate"] = {
         "token": token,
-        "marker_file": str(path),
-        "marker_line": line_no,
-        "marker_text": marker_text,
+        "markers": markers,
         "marker_cleared": False,
-        "quiz_passed": False,
+        "question": None,
+        "answer_plain": None,
         "attempts": 0,
+        "quiz_passed": False,
         "armed_at": now_iso(),
-        "lines_at_arm": state.get("lines_since_review", 0),
+        "dwell_seconds": dwell_for(lines),
+        "lines_at_arm": lines,
     }
     save_state(state)
     log_event(
         "gate_armed",
-        session=state["session_id"],
-        lines=state.get("lines_since_review", 0),
+        project=state["project"],
+        lines=lines,
         level=cfg.get("level"),
-        marker_file=str(path),
-        files=state.get("files", {}),
+        markers=[m["file"] for m in markers],
     )
-    return armed_message(state, state["gate"], cfg)
+    return armed_message(state, state["gate"], cfg, lines)
 
+
+# --------------------------------------------------------------------------
+# bash allowlist
+# --------------------------------------------------------------------------
 
 ALLOWED_SUBCOMMANDS = {"arm-quiz", "answer", "status"}
 
@@ -673,22 +765,83 @@ def is_gate_command(command: str) -> bool:
     return tokens[2] in ALLOWED_SUBCOMMANDS
 
 
+# --------------------------------------------------------------------------
+# hook entry points
+# --------------------------------------------------------------------------
+
+
+def hook_post_tool(data: dict) -> int:
+    """Tally lines after every successful write."""
+    cfg = load_config()
+    tool_name = data.get("tool_name", "")
+    if tool_name not in WRITE_TOOLS:
+        return allow()
+
+    tool_input = data.get("tool_input") or {}
+    file_path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+    if is_ignored(file_path, cfg):
+        return allow()
+
+    lines = measure(tool_name, tool_input)
+    if lines <= 0:
+        return allow()
+
+    state = load_state(project_for(data.get("cwd", "")))
+    state["lines_tallied"] = state.get("lines_tallied", 0) + lines
+    state["lines_total"] = state.get("lines_total", 0) + lines
+    state["files"][file_path] = state["files"].get(file_path, 0) + lines
+    save_state(state)
+
+    threshold = threshold_for(cfg)
+    current = state["lines_tallied"]
+    # A heads-up before the hard stop, so Claude can finish the unit of work it
+    # is in rather than getting cut off mid-refactor.
+    if not state.get("gate") and threshold * 0.8 <= current < threshold:
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PostToolUse",
+                        "additionalContext": (
+                            f"review-gate: {current} of {threshold} lines. The review gate "
+                            f"trips shortly — reach a coherent stopping point rather than "
+                            f"starting anything large."
+                        ),
+                    }
+                }
+            )
+        )
+    return allow()
+
+
+def hook_pre_write(data: dict) -> int:
+    """Block writes when a gate is armed, and arm one when the threshold is hit."""
+    cfg = load_config()
+    state = load_state(project_for(data.get("cwd", "")))
+
+    if state.get("gate"):
+        if evaluate_gate(state, cfg):
+            clear_gate(state, cfg)
+            return allow()
+        return deny(stage_message(state, state["gate"], cfg))
+
+    lines = measured_lines(state, cfg)
+    if lines < threshold_for(cfg):
+        return allow()
+    return deny(arm_gate(state, cfg, lines))
+
+
 def hook_pre_bash(data: dict) -> int:
     """Block the shell during a gate, except the gate script itself.
 
-    Without this, removing the planted marker would be one `sed` away, and the
-    marker stage would mean nothing.
+    Without this, removing a planted marker would be one `sed` away, and stage 1
+    would mean nothing.
     """
     cfg = load_config()
-    if not cfg.get("block_bash_during_gate", True):
-        return allow()
-
-    session = data.get("session_id") or resolve_session(None) or "unknown"
-    state = load_state(session)
+    state = load_state(project_for(data.get("cwd", "")))
     gate = state.get("gate")
     if not gate:
         return allow()
-
     if evaluate_gate(state, cfg):
         clear_gate(state, cfg)
         return allow()
@@ -700,38 +853,41 @@ def hook_pre_bash(data: dict) -> int:
         return allow()
 
     return deny(
-        "REVIEW GATE ARMED — the shell is blocked so the marker cannot be removed "
-        "by anything but the user.\n\n"
-        + stage_message(state, gate, cfg)
+        "REVIEW GATE ARMED — the shell is blocked so the markers cannot be removed by "
+        "anything but the user.\n\n" + stage_message(state, gate, cfg)
     )
 
 
 def hook_session_start(data: dict) -> int:
-    """Export the session id and report where things stand."""
-    prune_state()
     cfg = load_config()
-    session = data.get("session_id") or ""
+    cwd = data.get("cwd", "") or os.getcwd()
+    project = project_for(cwd)
 
     env_file = os.environ.get("CLAUDE_ENV_FILE")
-    if env_file and session:
+    if env_file:
         try:
             with open(env_file, "a") as handle:
-                handle.write(f"export REVIEW_GATE_SESSION={shlex.quote(session)}\n")
+                handle.write(f"export REVIEW_GATE_PROJECT={shlex.quote(project)}\n")
         except OSError:
             pass
 
-    state = load_state(session) if session else None
-    level = cfg.get("level", "medium")
+    state = load_state(project)
+    # Persist immediately: this is the earliest safe moment to take the git
+    # baseline, before anything in the session has written to the tree.
+    save_state(state)
+    lines = measured_lines(state, cfg)
     threshold = threshold_for(cfg)
     context = (
-        f"review-gate active: {level} level, gate trips at {threshold} lines written. "
-        f"When it trips your writes and shell are blocked until the user reviews the code."
+        f"review-gate active: {cfg.get('level')} level, gate trips at {threshold} lines of "
+        f"unreviewed code in this project. The count is per project and carries across "
+        f"sessions — it currently stands at {lines}. When the gate trips your writes and "
+        f"shell are blocked until the user has reviewed."
     )
-    if state and state.get("gate"):
-        context += " A gate is currently ARMED and still unmet — resolve it before writing."
-    elif state and state.get("lines_since_review"):
-        context += f" {state['lines_since_review']} lines counted so far this session."
-
+    if state.get("gate"):
+        context += (
+            " A gate is ARMED right now and still unmet — resolve it before writing "
+            "anything."
+        )
     print(
         json.dumps(
             {
@@ -750,6 +906,12 @@ def hook_session_start(data: dict) -> int:
 # --------------------------------------------------------------------------
 
 
+def cli_project(args) -> str:
+    return getattr(args, "project", None) or os.environ.get("REVIEW_GATE_PROJECT") or project_for(
+        os.getcwd()
+    )
+
+
 def normalise(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
 
@@ -757,7 +919,7 @@ def normalise(text: str) -> str:
 def answer_matches(given: str, expected: str) -> bool:
     """Lenient match — the point is comprehension, not exact wording.
 
-    A short expected answer must appear in what the user said; a long one is
+    A short expected answer must appear in what the user said; a longer one is
     compared on its distinctive words so paraphrases still pass.
     """
     got, want = normalise(given), normalise(expected)
@@ -768,26 +930,44 @@ def answer_matches(given: str, expected: str) -> bool:
     want_words = [w for w in want.split() if len(w) > 3]
     if not want_words:
         return False
-    hits = sum(1 for word in want_words if word in got)
-    return hits / len(want_words) >= 0.6
+    return sum(1 for w in want_words if w in got) / len(want_words) >= 0.6
 
 
 def cmd_arm_quiz(args) -> int:
-    session = resolve_session(args.session)
-    if not session:
-        print("review-gate: no active session state found.", file=sys.stderr)
-        return 1
-    state = load_state(session)
+    state = load_state(cli_project(args))
     gate = state.get("gate")
     if not gate:
         print("review-gate: no gate is armed, nothing to attach a question to.")
         return 0
+    if gate.get("question") and not gate.get("quiz_passed"):
+        print(
+            f"review-gate: a question is already registered — {gate['question']}\n"
+            f"Ask that one. It is only replaced after three wrong answers.",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Commit-before-reveal: the first question has to be locked in while the
+    # markers are still up, so it cannot be shaped around something the user
+    # said while reviewing. A replacement after three misses cannot meet that.
+    early = not gate.get("marker_cleared")
+    if not early and not gate.get("voided_once"):
+        print(
+            "review-gate: too late to register the first question — the markers are "
+            "already cleared. Register it when the gate arms, before the user starts "
+            "reviewing. This gate now needs a fresh arm.",
+            file=sys.stderr,
+        )
+        return 1
+
     gate["question"] = args.question
-    gate["answer_hash"] = hashlib.sha256(normalise(args.answer).encode()).hexdigest()
     gate["answer_plain"] = args.answer
     gate["attempts"] = 0
+    gate["committed_early"] = early
     save_state(state)
-    log_event("quiz_armed", session=session, question=args.question)
+    log_event(
+        "quiz_armed", project=state["project"], question=args.question, committed_early=early
+    )
     print(
         "Question registered. Ask the user now, then submit their reply verbatim with "
         "`answer`. Do not answer on their behalf — the whole point is that a human read "
@@ -797,12 +977,8 @@ def cmd_arm_quiz(args) -> int:
 
 
 def cmd_answer(args) -> int:
-    session = resolve_session(args.session)
-    if not session:
-        print("review-gate: no active session state found.", file=sys.stderr)
-        return 1
     cfg = load_config()
-    state = load_state(session)
+    state = load_state(cli_project(args))
     gate = state.get("gate")
     if not gate:
         print("review-gate: no gate is armed.")
@@ -810,11 +986,13 @@ def cmd_answer(args) -> int:
     if not gate.get("question"):
         print("review-gate: register a question with `arm-quiz` first.", file=sys.stderr)
         return 1
-    if marker_present(gate):
+
+    remaining = outstanding_markers(gate)
+    if remaining:
         print(
-            f"review-gate: stage 1 is still outstanding — the marker is in "
-            f"{gate['marker_file']} (line {gate['marker_line']}). The user deletes it "
-            f"before the question counts.",
+            f"review-gate: stage 1 is still outstanding — {len(remaining)} marker(s) left:\n"
+            f"{marker_list(remaining)}\n"
+            f"The user deletes those before the question counts.",
             file=sys.stderr,
         )
         return 1
@@ -823,21 +1001,24 @@ def cmd_answer(args) -> int:
     if answer_matches(args.text, gate.get("answer_plain", "")):
         gate["quiz_passed"] = True
         save_state(state)
-        log_event("quiz_passed", session=session, attempts=gate["attempts"], given=args.text)
+        log_event(
+            "quiz_passed", project=state["project"], attempts=gate["attempts"], given=args.text
+        )
         if evaluate_gate(state, cfg):
             clear_gate(state, cfg)
             print("Gate cleared. Counter reset — carry on.")
+        else:
+            print(
+                f"Answer accepted. The gate still has {dwell_remaining(gate)}s of its minimum "
+                f"review time left — use it to finish walking the user through the changes."
+            )
         return 0
 
-    log_event("quiz_failed", session=session, attempts=gate["attempts"], given=args.text)
-
-    if gate["attempts"] >= 3:
+    log_event("quiz_failed", project=state["project"], attempts=gate["attempts"], given=args.text)
+    if gate["attempts"] >= MAX_ATTEMPTS:
         # Three misses usually means the question was the problem, not the human.
         # Voiding it keeps the gate from turning into a guessing game.
-        gate["question"] = None
-        gate["answer_plain"] = None
-        gate["answer_hash"] = None
-        gate["attempts"] = 0
+        gate.update({"question": None, "answer_plain": None, "attempts": 0, "voided_once": True})
         save_state(state)
         print(
             "Three misses — the question is not landing. Walk the user through that part "
@@ -850,8 +1031,7 @@ def cmd_answer(args) -> int:
     save_state(state)
     print(
         f"Not a match (attempt {gate['attempts']}). Tell the user what the answer was and "
-        f"why, point them at the specific code, and let them try again. The gate stays "
-        f"armed.",
+        f"why, point them at the specific code, and let them try again. The gate stays armed.",
         file=sys.stderr,
     )
     return 1
@@ -859,30 +1039,34 @@ def cmd_answer(args) -> int:
 
 def cmd_status(args) -> int:
     cfg = load_config()
-    session = resolve_session(args.session)
+    project = cli_project(args)
+    state = load_state(project)
+    lines = measured_lines(state, cfg)
     threshold = threshold_for(cfg)
-    if not session:
-        print(f"review-gate: {cfg.get('level')} level, trips at {threshold} lines. No session yet.")
-        return 0
-    state = load_state(session)
-    current = state.get("lines_since_review", 0)
+
     print(f"review-gate — {cfg.get('level')} level, gate trips at {threshold} lines")
-    print(f"  since last review : {current} lines ({max(0, threshold - current)} to go)")
-    print(f"  session total     : {state.get('lines_total', 0)} lines")
-    print(f"  gates passed      : {state.get('gates_passed', 0)}")
-    if state.get("files"):
-        print("  files touched:")
-        print(file_summary(state))
+    print(f"  project        : {project}")
+    print(f"  counting via   : {'git working tree' if state.get('git_root') else 'tool calls'}")
+    print(f"  unreviewed     : {lines} lines ({max(0, threshold - lines)} to go)")
+    print(f"  gates passed   : {state.get('gates_passed', 0)}")
+    if state.get("files") or state.get("git_root"):
+        print("  changed:")
+        print(file_summary(state, cfg))
+
     gate = state.get("gate")
     if gate:
+        remaining = outstanding_markers(gate)
         print("\n  GATE ARMED")
-        print(f"    marker  : {gate['marker_file']}:{gate['marker_line']}"
-              f" — {'still present' if marker_present(gate) else 'cleared'}")
-        if cfg.get("quiz_enabled", True):
-            state_word = "passed" if gate.get("quiz_passed") else (
-                "awaiting answer" if gate.get("question") else "no question set"
-            )
-            print(f"    question: {state_word}")
+        print(f"    markers : {len(remaining)} of {len(gate.get('markers', []))} still on disk")
+        for marker in remaining:
+            print(f"      {marker['file']}:{marker['line']}")
+        state_word = (
+            "passed" if gate.get("quiz_passed")
+            else ("awaiting answer" if gate.get("question") else "no question set")
+        )
+        print(f"    question: {state_word}")
+        if dwell_remaining(gate):
+            print(f"    minimum : {dwell_remaining(gate)}s remaining")
     return 0
 
 
@@ -906,40 +1090,37 @@ def cmd_level(args) -> int:
 def cmd_review(args) -> int:
     """Arm a gate on demand, before the threshold is reached."""
     cfg = load_config()
-    session = resolve_session(args.session)
-    if not session:
-        print("review-gate: no active session state found.", file=sys.stderr)
-        return 1
-    state = load_state(session)
+    state = load_state(cli_project(args))
     if state.get("gate"):
         print(stage_message(state, state["gate"], cfg))
         return 0
-    if not state.get("files"):
-        print("review-gate: nothing has been written yet this session.")
+    lines = measured_lines(state, cfg)
+    if lines <= 0:
+        print("review-gate: no unreviewed changes in this project.")
         return 0
-    print(arm_gate(state, cfg, state.get("cwd", "")))
+    print(arm_gate(state, cfg, lines))
     return 0
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(prog="gate.py", description=__doc__)
+    parser = argparse.ArgumentParser(prog="gate.py", description="review-gate")
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name in ("hook-post-tool", "hook-pre-write", "hook-pre-bash", "hook-session-start"):
         sub.add_parser(name)
 
     quiz = sub.add_parser("arm-quiz")
-    quiz.add_argument("--session")
+    quiz.add_argument("--project")
     quiz.add_argument("--question", required=True)
     quiz.add_argument("--answer", required=True)
 
     ans = sub.add_parser("answer")
-    ans.add_argument("--session")
+    ans.add_argument("--project")
     ans.add_argument("text")
 
     for name in ("status", "review"):
         node = sub.add_parser(name)
-        node.add_argument("--session")
+        node.add_argument("--project")
 
     lvl = sub.add_parser("level")
     lvl.add_argument("level", nargs="?", choices=["strict", "medium", "loose"])
@@ -959,14 +1140,13 @@ def main() -> int:
             print(f"review-gate hook error: {exc}", file=sys.stderr)
             return 0
 
-    cli = {
+    return {
         "arm-quiz": cmd_arm_quiz,
         "answer": cmd_answer,
         "status": cmd_status,
         "level": cmd_level,
         "review": cmd_review,
-    }
-    return cli[args.command](args)
+    }[args.command](args)
 
 
 if __name__ == "__main__":

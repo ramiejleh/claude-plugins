@@ -23,8 +23,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/gate.py" level "$1"
 The setting is global — it applies to every project and every session, and it
 persists in `~/.claude/review-gate/config.json`.
 
-Thresholds count lines added plus lines removed across `Edit`, `Write`,
-`MultiEdit` and `NotebookEdit`, and reset to zero every time a gate is passed.
+Thresholds count lines added plus lines removed in the project — from the git
+working tree where there is one, otherwise from Claude's tool calls — and reset
+to zero every time a gate is passed.
 
 | Level  | Trips at   | Roughly                          |
 | ------ | ---------- | -------------------------------- |

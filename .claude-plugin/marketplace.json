@@ -12,7 +12,7 @@
     {
       "name": "interactive-pr-review",
       "source": "./interactive-pr-review",
-      "description": "Interactively review GitHub PRs (comments only) — Claude fetches the PR, writes a holistic overview, groups the diff into logical chunks with neutral descriptions, a 'things worth confirming' list, and inline insight bubbles explaining the code, presents them in a review UI with a sidebar and IDE-highlighted diffs (full diff per group), and posts your line- and file-level comments back to GitHub in one click.",
+      "description": "Interactively review GitHub PRs (comments only) \u2014 Claude fetches the PR, writes a holistic overview, groups the diff into logical chunks with neutral descriptions, a 'things worth confirming' list, and inline insight bubbles explaining the code, presents them in a review UI with a sidebar and IDE-highlighted diffs (full diff per group), and posts your line- and file-level comments back to GitHub in one click.",
       "version": "1.24.0",
       "author": {
         "name": "Rami Ejleh",
@@ -33,8 +33,8 @@
     {
       "name": "review-gate",
       "source": "./review-gate",
-      "description": "Blocks Claude's write tools once it has generated more code than you have reviewed. A hook counts the lines and, at a strict (150) / medium (400) / loose (1000) threshold, plants a marker comment in your source that only you can delete — Claude's editing tools and shell are blocked while it is armed — then asks you a question about the changes. Writing resumes when both clear. Applies to every project and session; there is no skip command.",
-      "version": "1.0.0",
+      "description": "Blocks Claude's write tools once it has generated more code than you have reviewed. A hook measures unreviewed change per project \u2014 from the git working tree, so shell writes and subagents count, and the count survives across conversations \u2014 and at a strict (150) / medium (400) / loose (1000) threshold plants marker comments in your source that only you can delete, with Claude's editing tools and shell blocked while it is armed, then asks you a question about the changes. Both stages always apply and there is no skip command.",
+      "version": "1.1.0",
       "author": {
         "name": "Rami Ejleh",
         "url": "https://github.com/ramiejleh"

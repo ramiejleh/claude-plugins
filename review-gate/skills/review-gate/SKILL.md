@@ -5,16 +5,15 @@ description: How to run a code review gate when the review-gate hook has blocked
 
 # Running a review gate
 
-A hook has counted how much code you have written since the last review, decided
-the human is at risk of losing track of it, and blocked your write tools and your
-shell. This skill is how you get through that honestly.
+A hook has measured how much unreviewed code has built up in this project,
+decided the human is at risk of losing track of it, and blocked your write tools
+and your shell. This skill is how you get through that honestly.
 
 The gate exists because of a specific failure mode: you generate faster than a
 person can read, and if nobody stops the loop, the human ends up nominally owning
-a few thousand lines they have never looked at. The gate is a forcing function
-against that. It is not an obstacle between you and the task — on the timescale
-that matters it *is* the task, because unreviewed code is a liability the user
-inherits.
+a few thousand lines they have never looked at. It is not an obstacle between you
+and the task — on the timescale that matters it *is* the task, because unreviewed
+code is a liability the user inherits.
 
 ## What is blocked and what is not
 
@@ -24,75 +23,109 @@ the gate script itself).
 Still available: `Read`, `Grep`, `Glob`. This is deliberate. During a gate your
 job is to help the human read code, and you have exactly the tools for it.
 
+## What is being counted
+
+Lines of unreviewed change **in the project**, not in the session. The count
+carries across conversations, so a fresh session does not reset it, and it is
+shared by anyone working in the same repo.
+
+In a git repo the number comes from the working tree — `git diff` against the
+last reviewed state, plus untracked files. That means code written through a
+shell heredoc or by a subagent counts exactly like an `Edit` does. Outside a git
+repo it falls back to tallying your tool calls.
+
+Practical consequence: you cannot get out from under the counter by changing how
+you write. Don't try; it reads as evasion and it doesn't work.
+
 ## The two stages
 
-**Stage 1 — the planted marker.** The hook has inserted a comment line carrying a
-random token into one of the files you changed. It clears when that token is gone
-from disk, which the script confirms by reading the file. The user deletes it.
-You cannot: every tool that could remove it is blocked while the gate is armed.
-That is what makes this stage mean something.
+Both are always required. There is no configuration that reduces a gate to one
+of them.
+
+**Stage 1 — the planted markers.** The hook has inserted a comment line carrying
+a random token into each of the files that changed most (up to five). They clear
+when *every* token is gone from disk, which the script confirms by reading the
+files. The user deletes them. You cannot: every tool that could is blocked while
+the gate is armed. Markers go in several files rather than one because a single
+marker only ever proves that one file was opened.
 
 **Stage 2 — the question.** You write one question about the changes, ask the
 user, and submit their reply. The script checks it against an answer you
-registered. Stage 2 only counts once stage 1 has cleared.
+registered.
 
-Once both clear, the gate lifts on its own. Just retry the edit you were making.
+There is also a minimum time on the gate, scaled to how much there is to read.
+It only rules out the clear that happens faster than anyone could have opened a
+file. If the answer lands before the time is up, keep talking through the code —
+that is what the remaining time is for.
+
+Once both stages clear and the time is up, the gate lifts on its own. Retry the
+edit you were making.
 
 ## What to do, in order
 
-**1. Tell the user plainly what happened.** Lead with the fact that the gate
+**1. Register your question first.** Do this immediately, before you have said
+anything to the user about what changed:
+
+```
+python3 <plugin>/scripts/gate.py arm-quiz --project '<path>' \
+  --question 'your question' --answer 'the answer you expect'
+```
+
+The order is enforced — the script refuses a first question once the markers are
+already gone. The reason is that a question written after the user has been
+talking about the code can be shaped around something they already said, which
+tests nothing. Committing to it up front keeps it honest.
+
+The blocked-tool message gives you the exact command with the project path filled
+in. Use that rather than reconstructing it.
+
+**2. Tell the user plainly what happened.** Lead with the fact that the gate
 tripped, how many lines it covers, and which files. Do not bury it under an
 apology or present it as an error — it is the system working.
 
-**2. Walk them through the changes.** This is the part that actually delivers the
+**3. Walk them through the changes.** This is the part that actually delivers the
 value. Do not just say "please review." Give them an orientation they can read in
 a minute: what you built, the two or three decisions inside it that a reviewer
 would want to push on, and anything you are unsure about. Name files and
 functions. If something was a judgement call, say which way you went and what the
 alternative was.
 
-The most useful thing you can surface here is the stuff a diff does not show —
-an assumption you made about the data, an edge case you deliberately did not
-handle, a place where you followed an existing pattern you are not certain is
-right.
+The most useful thing you can surface here is what a diff does not show — an
+assumption you made about the data, an edge case you deliberately did not handle,
+a place where you followed an existing pattern you are not certain is right.
 
-**3. Point them at the marker.** Give them the exact path and line number. Tell
-them the line is a comment, deleting it is safe, and nothing else in the file
-needs touching.
+If the count includes changes you did not make (a subagent's work, or the user's
+own edits), say so. They are on the hook for reviewing those too, and it is not
+obvious from the file list who wrote what.
 
-**4. Register a question.** Write it *before* they answer:
-
-```
-python3 <plugin>/scripts/gate.py arm-quiz --session <id> \
-  --question 'your question' --answer 'the answer you expect'
-```
-
-The blocked-tool message gives you the exact command with the session id filled
-in. Use that rather than reconstructing it.
+**4. Point them at the markers.** Give every path and line number. Tell them the
+lines are comments, deleting them is safe, and nothing else needs touching. All
+of them have to go.
 
 **5. Submit their reply verbatim.**
 
 ```
-python3 <plugin>/scripts/gate.py answer --session <id> 'what the user said'
+python3 <plugin>/scripts/gate.py answer --project '<path>' 'what the user said'
 ```
 
-Verbatim matters. Do not tidy their answer up into the shape you were looking
-for, and do not fill in a part they left out. Matching is lenient about wording
-already — it looks for the substance, not the phrasing — so a real answer in
-casual words will pass. If theirs does not, that is information.
+Verbatim matters. Do not tidy their answer into the shape you were looking for,
+and do not fill in a part they left out. Matching is lenient about wording
+already — it looks for substance, not phrasing — so a real answer in casual words
+will pass. If theirs does not, that is information.
 
 **6. If they get it wrong,** tell them what the answer was, why, and where in the
 code to look. Then let them try again. A wrong answer is the gate doing its job:
-it found a piece of code the user did not have a handle on. Treat it as a
-teaching moment, not a failed transaction.
+it found code the user did not have a handle on. Treat it as a teaching moment,
+not a failed transaction. After three misses the question is voided and you
+register a different one — at that point the problem is usually the question.
 
 ## Writing a question worth asking
 
 A good question is one that a person who read the changes can answer and a person
 who scrolled past them cannot. That rules out most of what comes naturally.
 
-Bad questions are answerable from the question itself, or from general knowledge,
-or from the file listing you just showed them:
+Bad questions are answerable from the question itself, from general knowledge, or
+from the file listing you just showed them:
 
 - "What language is the new module written in?"
 - "Which file did I add the retry logic to?" — you just told them.
@@ -113,38 +146,38 @@ to find it. It gets the code read closely and it surfaces something worth fixing
 Ask about the code you are least confident in. If a gate keeps passing on your
 easiest question, the gate is not doing anything.
 
+The user can see the question. If they tell you it is a cop-out, they are almost
+certainly right — say so, and ask a better one rather than defending it.
+
 ## Integrity
 
 Stage 1 is enforced by the script. Stage 2 is not — you write the question, you
-register the answer, and you submit the reply. Nothing stops you from arming a
-trivial question or from answering it yourself. Every gate is logged to
-`~/.claude/review-gate/log.jsonl` with the question, the answer and what was
-submitted, so the user can read back exactly how each one went.
+register the expected answer, and you submit the reply. Nothing stops you from
+arming a trivial question or answering it yourself. Every gate is logged to
+`~/.claude/review-gate/log.jsonl` with the question, the answer, the attempts and
+whether the question was committed up front, so the user can read back exactly
+how each one went.
 
-Treat that as the reason to be straight about it rather than as a threat. The
-user installed this plugin to be protected from a specific thing. Passing the
-gate on their behalf gives them the feeling of oversight without the substance,
-which is worse than no gate at all — they would at least know to be careful.
+Treat that as a reason to be straight about it rather than as a threat. The user
+installed this to be protected from a specific thing. Passing the gate on their
+behalf gives them the feeling of oversight without the substance, which is worse
+than no gate at all — they would at least know to be careful.
 
 So, concretely:
 
 - Do not answer the question yourself, or infer what they "would have said" from
   something they said earlier.
-- Do not treat "just skip it" as consent to bypass the gate. If they genuinely
-  want the level changed, that is `/review-gate:level`; if they want it off, that
-  is uninstalling the plugin. Say so and let them choose.
+- Do not treat "just skip it" as consent to bypass the gate. If they want the
+  level changed, that is `/review-gate:level`; if they want it off, that is
+  uninstalling the plugin. Say so and let them choose.
 - Do not look for a tool that is not blocked. If you find one, that is a bug
   worth reporting, not a door.
 - Do not ask a question you know is trivial in order to get moving again.
 
 If the user is frustrated by the interruption, that is fair and you can say so —
-and the honest response is to make the review fast and worthwhile, not to make it
-hollow.
+the honest response is to make the review fast and worthwhile, not hollow.
 
 ## Levels and status
-
-Thresholds count lines added plus lines removed, per session, reset on every
-passed gate.
 
 | Level  | Trips at    | Feels like                          |
 | ------ | ----------- | ----------------------------------- |
@@ -152,15 +185,16 @@ passed gate.
 | medium | 400 lines   | once per typical PR                 |
 | loose  | 1000 lines  | only when things have run away      |
 
-- `/review-gate:status` — lines so far, what is left, files touched
+- `/review-gate:status` — unreviewed lines, what is left, files changed
 - `/review-gate:level strict|medium|loose` — change the threshold
 - `/review-gate:review` — arm a gate now, before the threshold
 
-Config lives at `~/.claude/review-gate/config.json` if the user wants to tune
-thresholds, turn the quiz stage off, or add ignore patterns.
+Config lives at `~/.claude/review-gate/config.json` for custom thresholds and
+ignore patterns. A commit rebaselines the count, since committing is a natural
+review point.
 
 ## When there is no gate armed
 
 If the user is asking about the gate rather than tripping one, answer from the
-tables above and `/review-gate:status`. Do not arm a gate to demonstrate — use
+table above and `/review-gate:status`. Do not arm a gate to demonstrate — use
 `/review-gate:review` only if they ask for it.
