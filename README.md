@@ -9,6 +9,7 @@ below from inside Claude Code.
 | Plugin | Description |
 | --- | --- |
 | [**interactive-pr-review**](./interactive-pr-review) | Interactively review GitHub PRs (comments only) — Claude fetches the PR, writes a holistic overview, groups the diff into logical chunks with neutral descriptions and inline insight bubbles, presents them in an IDE-highlighted review UI, and posts your line- and file-level comments back to GitHub in one click. |
+| [**walkthrough**](./walkthrough) | Turns a feature into a paginated HTML walkthrough you read like a book — real code excerpts in execution order, one step per page, with the explanation for each hidden behind a click so you read the code and form your own understanding first. Works on any existing code, not just what Claude wrote. |
 | [**review-gate**](./review-gate) | Stops Claude writing once it has generated more code than you have read. A hook counts the lines and, at your chosen threshold, plants a marker comment in your source that only you can delete — Claude's editing tools and shell are blocked while it is armed — then asks you a question about the changes before writing resumes. |
 
 ## Add the marketplace
@@ -45,7 +46,8 @@ To pick up a newer version after one is published:
 ├── .github/CODEOWNERS                # review owners
 ├── README.md                         # this file
 ├── interactive-pr-review/            # a plugin (see its own README)
-└── review-gate/                      # a plugin (see its own README)
+├── review-gate/                      # a plugin (see its own README)
+└── walkthrough/                      # a plugin (see its own README)
 ```
 
 ## License

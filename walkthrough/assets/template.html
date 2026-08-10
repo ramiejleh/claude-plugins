@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ — walkthrough</title>
+<style>/*__CSS__*/</style>
+</head>
+<body>
+<div id="app" hidden>
+  <header id="masthead">
+    <div class="masthead-text">
+      <h1 id="doc-title"></h1>
+      <p id="doc-subtitle"></p>
+    </div>
+    <div class="masthead-actions">
+      <button id="toc-btn" type="button" title="Contents (t)">Contents</button>
+      <button id="theme-btn" type="button" title="Toggle theme">Theme</button>
+    </div>
+  </header>
+
+  <nav id="toc" hidden aria-label="Contents">
+    <h2>Contents</h2>
+    <ol id="toc-list"></ol>
+  </nav>
+
+  <main id="page" tabindex="-1">
+    <div class="step-head">
+      <span class="step-count" id="step-count"></span>
+      <h2 class="step-title" id="step-title"></h2>
+      <p class="step-note" id="step-note" hidden></p>
+    </div>
+    <div id="excerpts"></div>
+  </main>
+
+  <footer id="pager">
+    <button id="prev" type="button">&larr; prev</button>
+    <div id="dots" role="progressbar"></div>
+    <button id="next" type="button">next &rarr;</button>
+  </footer>
+
+  <p id="colophon"></p>
+</div>
+
+<noscript>
+  <p style="font:16px/1.6 system-ui;padding:2rem;max-width:38rem;margin:auto">
+    This walkthrough needs JavaScript to paginate. Everything is embedded in this
+    file &mdash; nothing is fetched from the network.
+  </p>
+</noscript>
+
+<script>/*__HLJS__*/</script>
+<script>/*__PAYLOAD__*/</script>
+<script>/*__JS__*/</script>
+</body>
+</html>

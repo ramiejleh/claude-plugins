@@ -1,0 +1,28 @@
+{
+  "name": "walkthrough",
+  "version": "0.1.0",
+  "description": "Turns a feature into a paginated HTML walkthrough you read like a book — real code excerpts in execution order, one step per page, with the explanation for each hidden behind a click so you read the code and form your own understanding first.",
+  "author": {
+    "name": "Rami Ejleh",
+    "url": "https://github.com/ramiejleh"
+  },
+  "homepage": "https://github.com/ramiejleh/DefyAtrophy/tree/main/walkthrough",
+  "repository": "https://github.com/ramiejleh/DefyAtrophy",
+  "license": "MIT",
+  "keywords": [
+    "code-comprehension",
+    "onboarding",
+    "documentation",
+    "codebase",
+    "learning",
+    "walkthrough",
+    "explain-code",
+    "syntax-highlighting"
+  ],
+  "commands": [
+    "./commands/walkthrough.md"
+  ],
+  "skills": [
+    "./skills/authoring-walkthroughs"
+  ]
+}
