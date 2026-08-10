@@ -7,7 +7,7 @@ allowed-tools: Bash, Read, Write, Glob, Grep, Skill
 # Reopen a cached PR review
 
 You are reopening a pull request the user already analyzed with
-`/interactive-pr-review:review`. Its artifacts persist in `/tmp` (this plugin no longer
+`/interactive-pr-review:review`. Its artifacts persist in the project's `.reviews/` directory (this plugin no longer
 auto-cleans them), so a review can be revisited without re-fetching and re-analyzing —
 **as long as the PR hasn't changed on GitHub.**
 
@@ -20,7 +20,7 @@ auto-cleans them), so a review can be revisited without re-fetching and re-analy
 
 - **Fresh-only.** Never show a cached review that no longer matches the PR. If the cached
   head SHA differs from the live one, re-analyze instead of reopening stale artifacts.
-- **The cache is the groups JSON.** `/tmp/pr-$1-groups.json` drives the UI and carries
+- **The cache is the groups JSON.** `.reviews/pr-$1-groups.json` drives the UI and carries
   `pr.headSha` / `pr.url` — everything the reopen needs, plus the vendored assets.
 
 ## Step 0 — Load the skill
@@ -42,7 +42,8 @@ ask the user for the PR number and stop.
 The reopen only works from a prior analysis. Check for the groups JSON:
 
 ```bash
-test -f /tmp/pr-$1-groups.json && echo "cache present" || echo "no cache"
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+test -f $REVIEWS/pr-$1-groups.json && echo "cache present" || echo "no cache"
 ```
 
 If it is missing, stop with a clear message — do **not** silently start a fresh analysis:
@@ -56,7 +57,8 @@ If `$2` (or a URL) gives an `owner/repo`, use `--repo <slug>`. Otherwise derive 
 cached PR url:
 
 ```bash
-SLUG=$(python3 -c "import json,sys; u=json.load(open('/tmp/pr-$1-groups.json'))['pr'].get('url',''); import re; m=re.search(r'github\.com/([^/]+/[^/]+)/pull', u); print(m.group(1) if m else '')")
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+SLUG=$(python3 -c "import json,sys; u=json.load(open('$REVIEWS/pr-$1-groups.json'))['pr'].get('url',''); import re; m=re.search(r'github\.com/([^/]+/[^/]+)/pull', u); print(m.group(1) if m else '')")
 ```
 
 Use `$2` if the user gave a slug; otherwise `$SLUG` from the cached url. If both are empty,
@@ -71,7 +73,8 @@ the fetch would fail (yielding a false "stale" verdict). An array expands correc
 or two words in both bash and zsh:
 
 ```bash
-CACHED_SHA=$(python3 -c "import json; print(json.load(open('/tmp/pr-$1-groups.json'))['pr'].get('headSha',''))")
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+CACHED_SHA=$(python3 -c "import json; print(json.load(open('$REVIEWS/pr-$1-groups.json'))['pr'].get('headSha',''))")
 REPO_ARGS=(); [ -n "$SLUG" ] && REPO_ARGS=(--repo "$SLUG")   # use $2's slug here if given
 LIVE_SHA=$(gh pr view $1 "${REPO_ARGS[@]}" --json commits --jq '.commits[-1].oid')
 echo "cached=$CACHED_SHA live=$LIVE_SHA"
@@ -86,15 +89,16 @@ echo "cached=$CACHED_SHA live=$LIVE_SHA"
 
 Rebuild the HTML from the cached groups JSON using the skill's §4 injection script, then
 open it. Rebuild (don't just reopen a leftover `.html`): it guarantees the current template
-and assets are used, and works even if `/tmp/pr-$1-review.html` was cleaned while the groups
+and assets are used, and works even if `.reviews/pr-$1-review.html` was cleaned while the groups
 JSON was kept.
 
 Run the §4 script with `PR=$1` (reads the fixed template + `ui.css` + `ui.js` + the vendored
-`highlight.min.js` + `hljs-github-theme.css` + `/tmp/pr-$1-groups.json`, writes
-`/tmp/pr-$1-review.html`), then:
+`highlight.min.js` + `hljs-github-theme.css` + `.reviews/pr-$1-groups.json`, writes
+`.reviews/pr-$1-review.html`), then:
 
 ```bash
-open /tmp/pr-$1-review.html      # macOS; xdg-open (Linux) / start (Windows)
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+open $REVIEWS/pr-$1-review.html      # macOS; xdg-open (Linux) / start (Windows)
 ```
 
 Tell the user this is the cached review for #$1 (head `CACHED_SHA`), reopened without
@@ -117,7 +121,7 @@ export, post per Step 5 / skill §6).
 
 ## Notes
 
-- Artifacts for #$1 remain in `/tmp` after reopening (by design). Remove them with
+- Artifacts for #$1 remain in `.reviews/` after reopening (by design). Remove them with
   `/interactive-pr-review:cleanup $1` (or with no argument to clear all cached PRs).
 - **PR now merged/closed:** the freshness step reports the state; a re-analysis may return
   an empty diff — report it and stop.

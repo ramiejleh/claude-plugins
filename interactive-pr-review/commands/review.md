@@ -23,7 +23,7 @@ request **#$1** carefully, chunk by chunk, then post their comments back to GitH
 - **The user is the reviewer.** Your reasoning is advisory. Nothing is posted to
   GitHub until the user has explicitly approved the exact set of comments.
 - **Keep the big blobs out of context.** The grouping JSON and the built HTML are large;
-  they live in temp files and are moved around with scripts, never pasted into the chat.
+  they live in files under `.reviews/` and are moved around with scripts, never pasted into the chat.
 - **Fail loudly and early.** If `gh` is missing, unauthenticated, or the PR can't be
   found, stop and tell the user precisely what to fix.
 
@@ -50,9 +50,9 @@ Skill(pr-review-ui)
 
 Per the skill, gather (use `--repo <slug>` when you have one):
 
-- Metadata → write to `/tmp/pr-$1-meta.json` (number, title, author, base, head, url,
+- Metadata → write to `.reviews/pr-$1-meta.json` (number, title, author, base, head, url,
   additions, deletions, changedFiles, headSha). The parser embeds this as the `pr` object.
-- The unified diff, saved to `/tmp/pr-$1.diff`: `gh pr diff $1 > /tmp/pr-$1.diff`
+- The unified diff, saved to `.reviews/pr-$1.diff`: `gh pr diff $1 > .reviews/pr-$1.diff`
 - The head commit SHA: `gh pr view $1 --json commits --jq '.commits[-1].oid'`
 
 If the PR is merged/closed with an empty diff, report the state and stop.
@@ -66,19 +66,20 @@ explicitly asks for one.**
 1. **Parse (deterministic):** resolve the plugin root first (see skill §2 "Resolving the
    plugin root" — `$CLAUDE_PLUGIN_ROOT` is empty in ad-hoc Bash), then run the parser:
    ```bash
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
    PLUGIN_ROOT="$CLAUDE_PLUGIN_ROOT"
    if [ -z "$PLUGIN_ROOT" ] || [ ! -e "$PLUGIN_ROOT/skills/pr-review-ui/SKILL.md" ]; then
      PLUGIN_ROOT=$(ls -d "$HOME"/.claude/plugins/cache/*/interactive-pr-review/*/ 2>/dev/null | sort -V | tail -1)
    fi
-   python3 "$PLUGIN_ROOT/skills/pr-review-ui/scripts/parse_diff.py" /tmp/pr-$1.diff /tmp/pr-$1-parsed.json --pr-json /tmp/pr-$1-meta.json
+   python3 "$PLUGIN_ROOT/skills/pr-review-ui/scripts/parse_diff.py" $REVIEWS/pr-$1.diff $REVIEWS/pr-$1-parsed.json --pr-json $REVIEWS/pr-$1-meta.json
    ```
    This assigns stable `hunkId`s and is the byte-exact source of truth for the code.
-2. **Analyze (you, in the main chat):** read `/tmp/pr-$1-parsed.json` (and `/tmp/pr-$1.diff`
+2. **Analyze (you, in the main chat):** read `.reviews/pr-$1-parsed.json` (and `.reviews/pr-$1.diff`
    for extra context) and author the **analysis only** — a top-level `overview` (a concise,
    plain-language summary of what the whole PR achieves), then groups with neutral
    `reasoning`, `thingsToConfirm`, per-file `role`/`description`/`insights`, and the
    `hunkIds` that are each group's concern — **no code** (reference hunks by `hunkId`). Write
-   it as **small per-group fragment files** into `/tmp/pr-$1-analysis.d/` — one bounded
+   it as **small per-group fragment files** into `.reviews/pr-$1-analysis.d/` — one bounded
    quoted-delimiter heredoc each: `00-overview.json`, then `NN-<groupid>.json` per group (the
    `NN` prefix sets on-screen order). Writing fragments — not one giant heredoc — is what keeps
    large PRs reliable: a dropped response loses only that one fragment, which you re-write.
@@ -88,8 +89,8 @@ explicitly asks for one.**
    unexplained shorthand, while keeping the technical substance and the code's own terms
    (skill §2 spells out the rules).
 3. **Assemble & validate (deterministic + your review):** stitch the fragments into
-   `/tmp/pr-$1-analysis.json`:
-   `python3 …/scripts/assemble_analysis.py /tmp/pr-$1-analysis.d /tmp/pr-$1-analysis.json`
+   `.reviews/pr-$1-analysis.json`:
+   `python3 …/scripts/assemble_analysis.py .reviews/pr-$1-analysis.d .reviews/pr-$1-analysis.json`
    (fragments are read in sorted filename order; a truncated fragment errors here naming the
    file, so only it is re-written). Then run **both** skill (§2) checks on the assembled file:
    the `hunkId` cross-check, **and the insight line-number re-read** — it prints the actual
@@ -97,7 +98,7 @@ explicitly asks for one.**
    its text describes. Fix any mis-anchored line numbers (never hand-count — read the number
    off `parsed.json`), re-assemble, and re-check until clean **before** merging. This is what
    prevents insight bubbles from rendering a few lines off in the built UI.
-4. **Merge (deterministic):** `python3 …/scripts/merge_analysis.py /tmp/pr-$1-parsed.json /tmp/pr-$1-analysis.json /tmp/pr-$1-groups.json --repo <owner/name> --sha <headSha>`.
+4. **Merge (deterministic):** `python3 …/scripts/merge_analysis.py .reviews/pr-$1-parsed.json .reviews/pr-$1-analysis.json .reviews/pr-$1-groups.json --repo <owner/name> --sha <headSha>`.
    This joins the analysis onto the real hunks, embeds `fullContent` (for "⋯ expand
    context") via `--repo`/`--sha` — read from the local git objects when available, else
    `gh api` in parallel — and **enforces invariants**: it errors on unknown
@@ -111,11 +112,11 @@ explicitly asks for one.**
 
 ## Step 4 — Build and open the review UI
 
-Run the injection script from the skill (§4) to produce `/tmp/pr-$1-review.html`: it reads
+Run the injection script from the skill (§4) to produce `.reviews/pr-$1-review.html`: it reads
 the fixed template, `ui.css`, `ui.js`, the vendored `highlight.min.js` and
-`hljs-github-theme.css`, and `/tmp/pr-$1-groups.json`, replaces the five tokens, and writes
+`hljs-github-theme.css`, and `.reviews/pr-$1-groups.json`, replaces the five tokens, and writes
 the self-contained HTML.
-Then open it (`open /tmp/pr-$1-review.html` on macOS).
+Then open it (`open .reviews/pr-$1-review.html` on macOS).
 
 Then walk the user through the page (skill §3 is the full description):
 
@@ -157,9 +158,9 @@ When the user pastes the JSON:
 
 ## Step 6 — Keep the artifacts (no auto-cleanup)
 
-Do **not** delete the temp files. They persist by design so the review can be reopened
+Do **not** delete the artifacts. They persist by design so the review can be reopened
 later with `/interactive-pr-review:reopen $1` — which rebuilds the UI from the cached
-`/tmp/pr-$1-groups.json` without re-fetching or re-analyzing, as long as the PR's head SHA
+`.reviews/pr-$1-groups.json` without re-fetching or re-analyzing, as long as the PR's head SHA
 hasn't moved. Let the user know they can reopen #$1 anytime, and that when they're done
 they can remove the artifacts with `/interactive-pr-review:cleanup $1` (or
 `/interactive-pr-review:cleanup` to clear all cached PRs).
@@ -173,5 +174,5 @@ they can remove the artifacts with `/interactive-pr-review:cleanup $1` (or
 - **User pastes malformed JSON:** show the parse error, point at the offending field,
   ask them to re-copy from the UI.
 - **User wants to abandon:** if they don't paste JSON or say to stop, post nothing. The
-  artifacts stay in `/tmp` (they can reopen or remove them later); mention
+  artifacts stay in `.reviews/` (they can reopen or remove them later); mention
   `/interactive-pr-review:cleanup $1` if they want to discard them now.

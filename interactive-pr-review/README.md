@@ -156,10 +156,10 @@ moved):
 2. **Group** — the diff is split into logical chunks (feature, tests, config,
    incidental changes…), each with a neutral reasoning line, a "Things worth confirming"
    list, per-file descriptions, and inline insight bubbles, plus a holistic **overview** of
-   what the whole PR achieves. Claude writes this analysis layer to temp files — no code, only
+   what the whole PR achieves. Claude writes this analysis layer to files in `.reviews/` — no code, only
    references to the parsed hunks — keeping your main context clean.
 3. **Review** — Claude generates and opens a self-contained HTML UI at
-   `/tmp/pr-<number>-review.html`: a collapsible sidebar (summary, one-click export, diff
+   `.reviews/pr-<number>-review.html`: a collapsible sidebar (summary, one-click export, diff
    view, show/hide toggles, file + group nav) beside collapsible groups, each file
    syntax-highlighted with a rich header,
    description, and 💡 insight bubbles. Comment at the line, file, or whole-review level.
@@ -168,7 +168,9 @@ moved):
 5. **Post** — Claude validates your comments, shows you a summary, and — after you
    confirm — posts them to GitHub as a single **comment** review, anchored to the exact
    lines and the PR's head commit. It never approves or requests changes.
-6. **Keep or clean** — the temp artifacts are **kept**, not auto-deleted, so you can
+6. **Keep or clean** — artifacts land in a `.reviews/` directory **inside the project**
+   (gitignored on first run), so a review survives a reboot and sits next to the code it
+   belongs to. They are **kept**, not auto-deleted, so you can
    `reopen` the PR later without re-fetching or re-analyzing. Reopen is **fresh-only**: if
    the PR's head commit has moved since it was analyzed, it re-runs the analysis instead of
    showing a stale diff. Remove artifacts when you're done with `cleanup`.
@@ -182,7 +184,7 @@ Nothing is ever posted to GitHub without your explicit confirmation.
 | Command | `/interactive-pr-review:review <pr#> [owner/repo]` | The entry point that runs the full review workflow. |
 | Command | `/interactive-pr-review:reopen <pr#> [owner/repo]` | Reopens a previously analyzed PR from cached artifacts. Fresh-only: rebuilds the UI instantly if the PR is unchanged, otherwise re-analyzes. |
 | Command | `/interactive-pr-review:list` | Lists the PRs with cached artifacts (number, title, size, age) and checks each one's freshness against GitHub (fresh = head commit unchanged since analysis; any new commit / force-push / rebase marks it STALE). |
-| Command | `/interactive-pr-review:cleanup [pr#]` | Removes cached artifacts — one PR's, or all (`/tmp/pr-*`). Lists and confirms before deleting. |
+| Command | `/interactive-pr-review:cleanup [pr#]` | Removes cached artifacts — one PR's, or all (`.reviews/pr-*`). Lists and confirms before deleting. |
 | Skill | `pr-review-ui` | Procedures for the parse → analyze → merge pipeline, building the review UI, and posting comments. The whole workflow runs in the main chat — no subagent. |
 | Scripts | `parse_diff.py`, `assemble_analysis.py`, `merge_analysis.py` | Deterministic diff parsing, fragment assembly, and analysis-merge. The diff never passes through the model. |
 | Hook | `SessionStart` gh check | Warns (non-blocking) if `gh` is missing or unauthenticated. |

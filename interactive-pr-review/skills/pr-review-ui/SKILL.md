@@ -1,6 +1,6 @@
 ---
 name: pr-review-ui
-description: Procedures for interactive GitHub PR review — fetch PR data with the gh CLI, group a unified diff into logical chunks (with group- and file-level AI reasoning plus inline read-only insight bubbles explaining the code) authored directly in the main chat and written to a temp JSON file, inject that data plus vendored highlight.js into a self-contained HTML review UI with a sidebar and per-file headers, collect line- and file-level comments, and post them back to GitHub as a pull request review. Use when reviewing, walking through, or commenting on a GitHub pull request by number.
+description: Procedures for interactive GitHub PR review — fetch PR data with the gh CLI, group a unified diff into logical chunks (with group- and file-level AI reasoning plus inline read-only insight bubbles explaining the code) authored directly in the main chat and written to a JSON file in the project's .reviews/ directory, inject that data plus vendored highlight.js into a self-contained HTML review UI with a sidebar and per-file headers, collect line- and file-level comments, and post them back to GitHub as a pull request review. Use when reviewing, walking through, or commenting on a GitHub pull request by number.
 user-invocable: false
 ---
 
@@ -21,13 +21,13 @@ wants to review a PR carefully.
    comments requires explicit user confirmation of the exact comment set first.
 3. **Anchor to the head commit.** Review comments must reference the PR's latest head
    SHA, or they will fail to attach or attach to the wrong revision.
-4. **The grouping JSON lives in a temp file, by design.** It is far too large to pass
-   through the conversation. You author the analysis as small per-group fragment files that a
-   script assembles and merges into that temp JSON, then inject it into the HTML with a
-   script.
-   Neither the big JSON nor the big HTML should be pasted into the main context. The temp
-   files are kept afterward (so a review can be reopened) and removed only via the manual
-   `cleanup` command — never auto-deleted at the end of a review.
+4. **The grouping JSON lives in a file, by design.** It is far too large to pass through
+   the conversation. You author the analysis as small per-group fragment files that a
+   script assembles and merges into that JSON, then inject it into the HTML with a script.
+   Neither the big JSON nor the big HTML should be pasted into the main context. The
+   artifacts live in `.reviews/` inside the project and are kept afterward (so a review can
+   be reopened), removed only via the manual `cleanup` command — never auto-deleted at the
+   end of a review.
 
 ## 1. Fetch PR data (read-only)
 
@@ -39,9 +39,26 @@ default macOS shell) does not word-split an unquoted `$REPO_FLAG`, so `--repo ow
 would reach `gh` as one glued argument and every call would fail. `"${REPO_ARGS[@]}"`
 expands to zero or two words correctly in both bash and zsh.
 
+Artifacts live in a `.reviews/` directory **inside the project**, not in `/tmp`, so a
+review survives a reboot and sits next to the code it belongs to.
+
+`$REVIEWS` has to be re-derived in **every** bash block that uses it. Shell state does not
+carry between tool calls, so a variable set in one block is gone by the next — an
+unset `$REVIEWS` would silently write to `/pr-128.diff` at the filesystem root.
+
 ```bash
 PR=<number>                       # e.g. 128
 REPO_ARGS=()                      # or: REPO_ARGS=(--repo owner/name)
+
+# Re-derive this at the top of every block that touches an artifact.
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+mkdir -p "$REVIEWS"
+
+# Keep artifacts out of version control (first run only)
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -n "$ROOT" ] && ! grep -qxF '.reviews/' "$ROOT/.gitignore" 2>/dev/null; then
+  printf '\n# interactive-pr-review artifacts\n.reviews/\n' >> "$ROOT/.gitignore"
+fi
 
 # Metadata
 gh pr view "$PR" "${REPO_ARGS[@]}" --json number,title,author,baseRefName,headRefName,body,url,additions,deletions,changedFiles,state,isDraft,mergeable
@@ -50,7 +67,7 @@ gh pr view "$PR" "${REPO_ARGS[@]}" --json number,title,author,baseRefName,headRe
 gh pr view "$PR" "${REPO_ARGS[@]}" --json files
 
 # The unified diff — save it, do not paste the whole thing around
-gh pr diff "$PR" "${REPO_ARGS[@]}" > /tmp/pr-$PR.diff
+gh pr diff "$PR" "${REPO_ARGS[@]}" > $REVIEWS/pr-$PR.diff
 
 # Head commit SHA — required to anchor review comments
 HEAD_SHA=$(gh pr view "$PR" "${REPO_ARGS[@]}" --json commits --jq '.commits[-1].oid')
@@ -98,21 +115,22 @@ stable `hunkId`s (`<path>#<index>`):
 
 ```bash
 PR=<number>
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
 PLUGIN_ROOT="$CLAUDE_PLUGIN_ROOT"
 if [ -z "$PLUGIN_ROOT" ] || [ ! -e "$PLUGIN_ROOT/skills/pr-review-ui/SKILL.md" ]; then
   PLUGIN_ROOT=$(ls -d "$HOME"/.claude/plugins/cache/*/interactive-pr-review/*/ 2>/dev/null | sort -V | tail -1)
 fi
 SCRIPTS="$PLUGIN_ROOT/skills/pr-review-ui/scripts"
-# Write PR metadata (from step 1) to /tmp/pr-$PR-meta.json first, e.g. with gh --json.
-python3 "$SCRIPTS/parse_diff.py" /tmp/pr-$PR.diff /tmp/pr-$PR-parsed.json --pr-json /tmp/pr-$PR-meta.json
-# -> OK parsed files: N hunks: M lines: L -> /tmp/pr-$PR-parsed.json
+# Write PR metadata (from step 1) to $REVIEWS/pr-$PR-meta.json first, e.g. with gh --json.
+python3 "$SCRIPTS/parse_diff.py" $REVIEWS/pr-$PR.diff $REVIEWS/pr-$PR-parsed.json --pr-json $REVIEWS/pr-$PR-meta.json
+# -> OK parsed files: N hunks: M lines: L -> $REVIEWS/pr-$PR-parsed.json
 ```
 
 `parsed.json` = `{ pr, files: [ { path, previousPath, status, language, additions,
 deletions, hunks: [ { hunkId, header, oldStart, newStart, lines: [ {type, oldLine,
 newLine, text} ] } ] } ] }`. This is the byte-exact source of truth for the code.
 
-**Stage B — analyze (you).** Read `/tmp/pr-<number>-parsed.json`
+**Stage B — analyze (you).** Read `.reviews/pr-<number>-parsed.json`
 (and the raw `.diff` for extra context if useful) and author the **analysis only** — a
 top-level `overview`, then groups with titles, neutral `reasoning`, `thingsToConfirm`,
 per-file `role`/`description`/`insights`, and the `hunkIds` that are each group's file's
@@ -125,7 +143,8 @@ for each so nothing is expanded:
 
 ```bash
 PR=<number>
-FRAG=/tmp/pr-$PR-analysis.d
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+FRAG=$REVIEWS/pr-$PR-analysis.d
 mkdir -p "$FRAG"
 
 # One overview fragment (numbered first so it sorts to the top):
@@ -312,8 +331,9 @@ order** (so `00-`, `01-`, `02-`… = on-screen group order); a truncated fragmen
 here with an error naming the file, so only that one needs re-writing:
 
 ```bash
-python3 "$SCRIPTS/assemble_analysis.py" /tmp/pr-$PR-analysis.d /tmp/pr-$PR-analysis.json
-# -> OK assembled: overview=yes groups=N from M fragment(s) -> /tmp/pr-$PR-analysis.json
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+python3 "$SCRIPTS/assemble_analysis.py" $REVIEWS/pr-$PR-analysis.d $REVIEWS/pr-$PR-analysis.json
+# -> OK assembled: overview=yes groups=N from M fragment(s) -> $REVIEWS/pr-$PR-analysis.json
 ```
 
 **Stage D — merge (deterministic, no LLM).** Join the analysis onto the parsed hunks,
@@ -330,8 +350,9 @@ order; and it then `die()`s if, after that sweep, any hunk or file is *still* no
 — the model cannot hide a file by omission.
 
 ```bash
-python3 "$SCRIPTS/merge_analysis.py" /tmp/pr-$PR-parsed.json /tmp/pr-$PR-analysis.json \
-  /tmp/pr-$PR-groups.json --repo owner/name --sha <headSha>
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+python3 "$SCRIPTS/merge_analysis.py" $REVIEWS/pr-$PR-parsed.json $REVIEWS/pr-$PR-analysis.json \
+  $REVIEWS/pr-$PR-groups.json --repo owner/name --sha <headSha>
 # -> OK groups: G files: F hunks: H insights: I [| swept N unassigned file(s) into 'Other changes'] [| note N file(s) shown in multiple groups (full diff each)] -> …
 ```
 
@@ -349,10 +370,11 @@ a meaningful group, though the review is still complete either way.
 ### Validate the analysis before merging
 
 After assembling, confirm the analysis parses and every `hunkId` exists (cross-checking
-against `parsed.json`). Run this on the assembled `/tmp/pr-$PR-analysis.json`:
+against `parsed.json`). Run this on the assembled `.reviews/pr-$PR-analysis.json`:
 
 ```bash
-python3 - /tmp/pr-$PR-analysis.json /tmp/pr-$PR-parsed.json <<'PY'
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+python3 - $REVIEWS/pr-$PR-analysis.json $REVIEWS/pr-$PR-parsed.json <<'PY'
 import json, sys
 a = json.load(open(sys.argv[1])); parsed = json.load(open(sys.argv[2]))
 valid = {h["hunkId"] for f in parsed["files"] for h in f["hunks"]}
@@ -382,7 +404,8 @@ code** sitting at its `startLine` and `endLine` (from `parsed.json`, on the insi
 side), so you read the code back instead of trusting a number you wrote:
 
 ```bash
-python3 - /tmp/pr-$PR-analysis.json /tmp/pr-$PR-parsed.json <<'PY'
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+python3 - $REVIEWS/pr-$PR-analysis.json $REVIEWS/pr-$PR-parsed.json <<'PY'
 import json, sys
 a = json.load(open(sys.argv[1])); parsed = json.load(open(sys.argv[2]))
 # Per file, per side: {lineNumber: text} for every line the diff shows.
@@ -564,20 +587,21 @@ are part of the token), `/* __UI_JS__ */`, and `/*__PR_REVIEW_DATA__*/ null`.
 Do **not** hand-edit the huge JSON into the template. Run a small script that reads the
 template, `ui.css`, `ui.js`, the vendored `highlight.min.js`, the vendored
 `hljs-github-theme.css`, and the
-groups JSON, replaces the five tokens, and writes `/tmp/pr-<number>-review.html`. Resolve
+groups JSON, replaces the five tokens, and writes `.reviews/pr-<number>-review.html`. Resolve
 the plugin root first (see **Resolving the plugin root** in §2 — `$CLAUDE_PLUGIN_ROOT` is
 empty in ad-hoc Bash, and shell state doesn't carry between blocks, so resolve it again
 here); the skill assets live under `skills/pr-review-ui/assets/`.
 
 ```bash
 PR=<number>
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
 PLUGIN_ROOT="$CLAUDE_PLUGIN_ROOT"
 if [ -z "$PLUGIN_ROOT" ] || [ ! -e "$PLUGIN_ROOT/skills/pr-review-ui/SKILL.md" ]; then
   PLUGIN_ROOT=$(ls -d "$HOME"/.claude/plugins/cache/*/interactive-pr-review/*/ 2>/dev/null | sort -V | tail -1)
 fi
 ASSETS="$PLUGIN_ROOT/skills/pr-review-ui/assets"
 
-python3 - "$ASSETS" "/tmp/pr-$PR-groups.json" "/tmp/pr-$PR-review.html" <<'PY'
+python3 - "$ASSETS" "$REVIEWS/pr-$PR-groups.json" "$REVIEWS/pr-$PR-review.html" <<'PY'
 import json, sys, pathlib
 assets, data_path, out_path = map(pathlib.Path, sys.argv[1:4])
 tpl   = (assets / "review-template.html").read_text()   # skeleton: markup + tokens
@@ -604,7 +628,7 @@ pathlib.Path(out_path).write_text(tpl)
 print("OK wrote", out_path, tpl.__len__(), "chars")
 PY
 
-open "/tmp/pr-$PR-review.html"      # macOS; use xdg-open (Linux) / start (Windows)
+open "$REVIEWS/pr-$PR-review.html"      # macOS; use xdg-open (Linux) / start (Windows)
 ```
 
 Then tell the user to walk the groups (sidebar TOC to jump around), read each file's
@@ -655,8 +679,9 @@ There is no `action` field. Every posted review is a plain `COMMENT` review.
    hand-concatenate JSON) and submit via `gh api`:
 
 ```bash
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
 gh api --method POST -H "Accept: application/vnd.github+json" \
-  "/repos/{owner}/{repo}/pulls/$PR/reviews" --input /tmp/pr-$PR-review-payload.json
+  "/repos/{owner}/{repo}/pulls/$PR/reviews" --input $REVIEWS/pr-$PR-review-payload.json
 ```
 
 Payload shape: `{ "commit_id": "<headSha>", "event": "COMMENT", "body": "<summary + file notes>", "comments": [ { "path", "line", "side", "body", (optional) "start_line", "start_side" } ] }`.
@@ -665,26 +690,27 @@ The `event` is always `COMMENT`.
 4. **Report** the returned review URL and counts. If GitHub rejects a comment whose line
    isn't in the diff, name it and offer to repost via `gh pr comment $PR --body "…"`.
 
-## 7. Temp files persist (manual cleanup only)
+## 7. Artifacts persist (manual cleanup only)
 
-**Do not auto-delete the artifacts.** After a review is posted (or abandoned), the temp
-files are kept on purpose so the PR can be reopened later with
-`/interactive-pr-review:reopen <PR>` — which rebuilds the UI from `/tmp/pr-$PR-groups.json`
+**Do not auto-delete the artifacts.** After a review is posted (or abandoned), the files
+are kept on purpose so the PR can be reopened later with
+`/interactive-pr-review:reopen <PR>` — which rebuilds the UI from `.reviews/pr-$PR-groups.json`
 without re-fetching or re-analyzing (as long as the PR's head SHA hasn't moved).
 
 A PR's full artifact set:
 
 ```bash
-/tmp/pr-$PR.diff /tmp/pr-$PR-meta.json /tmp/pr-$PR-parsed.json \
-/tmp/pr-$PR-analysis.d/ /tmp/pr-$PR-analysis.json /tmp/pr-$PR-groups.json \
-/tmp/pr-$PR-review.html /tmp/pr-$PR-review-payload.json
+REVIEWS="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.reviews"
+$REVIEWS/pr-$PR.diff $REVIEWS/pr-$PR-meta.json $REVIEWS/pr-$PR-parsed.json \
+$REVIEWS/pr-$PR-analysis.d/ $REVIEWS/pr-$PR-analysis.json $REVIEWS/pr-$PR-groups.json \
+$REVIEWS/pr-$PR-review.html $REVIEWS/pr-$PR-review-payload.json
 ```
 
 Removal is manual, via the `cleanup` command — never as an end-of-review step:
 - `/interactive-pr-review:cleanup <PR>` removes one PR's artifacts.
-- `/interactive-pr-review:cleanup` removes all cached PRs (`/tmp/pr-*`).
+- `/interactive-pr-review:cleanup` removes all cached PRs (`.reviews/pr-*`).
 
-Of the set, `/tmp/pr-$PR-groups.json` is the one that matters for reopening — it drives the
+Of the set, `.reviews/pr-$PR-groups.json` is the one that matters for reopening — it drives the
 UI and carries `pr.headSha` / `pr.url`. The others are regenerable intermediates.
 
 ### Notes & gotchas
