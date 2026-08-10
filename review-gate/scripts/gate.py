@@ -49,6 +49,12 @@ CONFIG_PATH = HOME / "config.json"
 LOG_PATH = HOME / "log.jsonl"
 
 WRITE_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+# Marking a plan item done is a finer completion boundary than turn end, and a
+# much more useful one: a single turn can run a whole multi-step plan, so waiting
+# for the turn to finish would let thousands of lines through before the gate
+# arms. Tool names differ across Claude Code versions; matching several costs
+# nothing, since a name that does not exist simply never fires.
+TASK_TOOLS = {"TaskUpdate", "TodoWrite", "TaskCreate"}
 MAX_MARKERS = 5
 MAX_ATTEMPTS = 3
 
@@ -56,9 +62,10 @@ DEFAULT_CONFIG = {
     "level": "medium",
     "thresholds": {"strict": 150, "medium": 400, "loose": 1000},
     # Past the threshold the gate waits for a finished piece of work rather than
-    # cutting in mid-implementation. This multiple is where it stops waiting,
-    # so one very long turn cannot defer the gate indefinitely.
-    "hard_ceiling_multiplier": 2,
+    # cutting in mid-implementation. This is how much extra code it will accept
+    # while waiting for that boundary — an absolute allowance, not a multiple,
+    # because the work in flight is roughly a fixed size regardless of level.
+    "boundary_grace_lines": 150,
     "ignore_globs": [
         "**/node_modules/**",
         "**/.git/**",
@@ -147,6 +154,15 @@ def threshold_for(cfg: dict) -> int:
         return int(thresholds.get(level, DEFAULT_CONFIG["thresholds"]["medium"]))
     except (TypeError, ValueError):
         return DEFAULT_CONFIG["thresholds"]["medium"]
+
+
+def ceiling_for(cfg: dict) -> int:
+    """Where the gate stops waiting for a clean boundary and just arms."""
+    try:
+        grace = max(0, int(cfg.get("boundary_grace_lines", 150)))
+    except (TypeError, ValueError):
+        grace = 150
+    return threshold_for(cfg) + grace
 
 
 def dwell_for(lines: int) -> int:
@@ -853,14 +869,71 @@ def hook_pre_write(data: dict) -> int:
     # implementation to review — which teaches them to wave gates through. Go
     # pending instead and let the Stop hook arm it at the end of the turn, when
     # the work is at a natural boundary.
-    ceiling = threshold * max(1, cfg.get("hard_ceiling_multiplier", 2))
-    if lines >= ceiling:
+    if lines >= ceiling_for(cfg):
         return deny(arm_gate(state, cfg, lines, trigger="ceiling"))
 
     if not state.get("pending_since"):
         state["pending_since"] = now_iso()
         save_state(state)
-        log_event("gate_pending", project=state["project"], lines=lines, ceiling=ceiling)
+        log_event("gate_pending", project=state["project"], lines=lines, ceiling=ceiling_for(cfg))
+    return allow()
+
+
+def marks_completion(tool_input: dict) -> bool:
+    """Whether this task-tool call reports something finished.
+
+    Deliberately permissive: the payload shape varies by version, and the two
+    failure directions are not equal. Arming a little early costs the user a
+    slightly smaller review; missing the boundary costs them a 5-step plan's
+    worth of unreviewed code, which is the thing this exists to prevent.
+    """
+    try:
+        return "completed" in json.dumps(tool_input).lower()
+    except (TypeError, ValueError):
+        return False
+
+
+def arm_at_boundary(state: dict, cfg: dict, trigger: str) -> str | None:
+    """Convert a queued gate into an armed one. None when nothing was queued."""
+    if state.get("gate") or not state.get("pending_since"):
+        return None
+    lines = measured_lines(state, cfg)
+    if lines < threshold_for(cfg):
+        # Fell back under (a revert, or a commit rebaselined the count).
+        state.pop("pending_since", None)
+        save_state(state)
+        return None
+    return arm_gate(state, cfg, lines, trigger=trigger)
+
+
+def hook_task_boundary(data: dict) -> int:
+    """A plan item was marked done — arm a queued gate here rather than waiting."""
+    if data.get("tool_name") not in TASK_TOOLS:
+        return allow()
+    if not marks_completion(data.get("tool_input") or {}):
+        return allow()
+
+    cfg = load_config()
+    state = load_state(project_for(data.get("cwd", "")))
+    if arm_at_boundary(state, cfg, "task-complete") is None:
+        return allow()
+
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PostToolUse",
+                    "additionalContext": (
+                        "review-gate: that finished a step of the plan and a gate was "
+                        "queued, so it has armed now rather than waiting for the rest of "
+                        "the plan. Markers are planted and your writes are blocked. Stop "
+                        "here, load the review-gate skill and run the gate — do not "
+                        "continue to the next step."
+                    ),
+                }
+            }
+        )
+    )
     return allow()
 
 
@@ -872,17 +945,10 @@ def hook_stop(data: dict) -> int:
     """
     cfg = load_config()
     state = load_state(project_for(data.get("cwd", "")))
-    if state.get("gate") or not state.get("pending_since"):
+    if arm_at_boundary(state, cfg, "turn-end") is None:
         return allow()
 
-    lines = measured_lines(state, cfg)
-    if lines < threshold_for(cfg):
-        # Fell back under (a revert, or a commit rebaselined the count).
-        state.pop("pending_since", None)
-        save_state(state)
-        return allow()
-
-    arm_gate(state, cfg, lines, trigger="turn-end")
+    lines = state["gate"]["lines_at_arm"]
     print(
         json.dumps(
             {
@@ -1139,7 +1205,7 @@ def cmd_status(args) -> int:
     print(f"  unreviewed     : {lines} lines ({max(0, threshold - lines)} to go)")
     print(f"  gates passed   : {state.get('gates_passed', 0)}")
     if state.get("pending_since") and not state.get("gate"):
-        ceiling = threshold * max(1, cfg.get("hard_ceiling_multiplier", 2))
+        ceiling = ceiling_for(cfg)
         print(
             f"  QUEUED         : over threshold, waiting for this piece of work to "
             f"finish (forced at {ceiling})"
@@ -1207,6 +1273,7 @@ def main() -> int:
         "hook-pre-bash",
         "hook-session-start",
         "hook-stop",
+        "hook-task-boundary",
     ):
         sub.add_parser(name)
 
@@ -1234,6 +1301,7 @@ def main() -> int:
         "hook-pre-bash": hook_pre_bash,
         "hook-session-start": hook_session_start,
         "hook-stop": hook_stop,
+        "hook-task-boundary": hook_task_boundary,
     }
     if args.command in hooks:
         try:

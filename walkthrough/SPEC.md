@@ -243,15 +243,15 @@ walkthrough/
 
 ---
 
-## Open questions
+## Decisions (all settled)
 
-1. **Bubble reveal state on revisit** — reset (recommended: preserves the
-   self-test) or remember?
-2. **Output location** — in-repo `.walkthroughs/` (recommended: they compound)
-   or a scratch dir like `interactive-pr-review` uses?
-3. **Outline confirmation** — always, or only above ~5 steps (recommended)?
-4. **Non-code targets** — should `/walkthrough` accept config, SQL, infra and
-   docs as first-class? (Recommended: yes; the contract is already file-and-line
-   based and nothing about it is language-specific.)
-5. **Staleness** — warn on open when the underlying files have moved on, or
-   silently re-render?
+1. ~~Bubble reveal state~~ — **settled: reset on reload**, so a second pass
+   re-tests you.
+2. ~~Output location~~ — **settled: in-repo `.walkthroughs/`**, gitignored on
+   first run, so walkthroughs accumulate per project.
+3. ~~Outline confirmation~~ — **settled: only above ~5 steps.**
+4. ~~Non-code targets~~ — **settled: yes, first-class.** The contract is
+   file-and-line based; nothing about it is language-specific.
+5. ~~Staleness~~ — **settled: warn on open** when the files have moved on
+   (0.3.0). Never silently re-render — a walkthrough you already read should not
+   change under you without saying so.

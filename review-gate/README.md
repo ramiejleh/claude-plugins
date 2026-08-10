@@ -69,14 +69,24 @@ Three states:
 | State | What is happening |
 | --- | --- |
 | **counting** | under the threshold, writes flow normally |
-| **queued** | threshold crossed — writes *still flow* so the current feature can be finished |
-| **armed** | the turn ended, markers are planted, writes and shell are blocked |
+| **queued** | threshold crossed — writes *still flow* so the work in flight can be finished |
+| **armed** | a completion boundary was reached, markers are planted, writes and shell blocked |
 
-The queued state is bounded. One very long turn can't defer the gate forever, so
-it arms mid-flight at `hard_ceiling_multiplier` × the threshold (2× by default —
-800 lines at medium). Claude can also call `checkpoint` to arm a queued gate
-early when it knows it has just finished something coherent; that can only make
-the gate stricter, never later.
+A queued gate arms at the **first** of these:
+
+1. **A plan step is marked done.** The finest boundary, and the one that matters
+   most — a single turn can run a whole multi-step plan, so waiting for the turn
+   would let the entire plan through.
+2. **The turn ends.** The fallback when no plan is being tracked.
+3. **`boundary_grace_lines` is exhausted** (150 by default) — forced, so nothing
+   can defer the gate indefinitely. That is 300 at strict, 550 at medium, 1150 at
+   loose.
+
+An absolute grace allowance rather than a multiple of the threshold, because the
+work in flight is roughly a fixed size regardless of how strict you have it set.
+
+Claude can also call `checkpoint` to arm a queued gate early when it knows it has
+just finished something coherent; that only ever makes the gate stricter.
 
 ## Levels
 

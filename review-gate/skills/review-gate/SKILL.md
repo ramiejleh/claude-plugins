@@ -39,16 +39,22 @@ you write. Don't try; it reads as evasion and it doesn't work.
 
 ## Why it fired when it did
 
-Crossing the line threshold does not arm the gate — it *queues* it. The gate arms
-when your turn ends, so the user reviews a finished piece of work instead of half
-an implementation. Half-finished code cannot be judged, and being asked to judge
-it anyway is what teaches someone to approve without looking.
+Crossing the line threshold does not arm the gate — it *queues* it. The gate then
+arms at the next completion boundary, so the user reviews a finished piece of work
+instead of half an implementation. Half-finished code cannot be judged, and being
+asked to judge it anyway is what teaches someone to approve without looking.
+
+The boundary is whichever comes first: **you mark a plan step done**, your **turn
+ends**, or the grace allowance runs out and it arms regardless. Marking a step done
+is the important one — a single turn can run an entire multi-step plan, and
+waiting for the turn to finish would hand the user the whole plan at once.
 
 Two consequences for how you work:
 
 - **When a gate is queued, finish what is open and stop.** Do not start anything
-  new, and do not keep going to defer the gate — it arms anyway at twice the
-  threshold, and you will have handed over a worse review.
+  new. In particular, do not leave a plan step unmarked to avoid tripping the
+  boundary — deferring only means the user gets a larger, worse review, and the
+  grace allowance runs out anyway.
 - **You can arm it early.** If you have just finished a coherent unit and know
   more work would muddy it, run `checkpoint --project '<path>'`. This only ever
   makes the gate stricter.
