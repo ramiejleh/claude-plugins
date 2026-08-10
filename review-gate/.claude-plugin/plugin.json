@@ -1,6 +1,6 @@
 {
   "name": "review-gate",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Blocks Claude's write tools once more code has been generated than you have reviewed. A hook measures unreviewed change per project, plants markers in your source you have to delete, and asks you a question about the changes before writing resumes.",
   "author": {
     "name": "Rami Ejleh",

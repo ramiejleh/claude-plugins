@@ -55,6 +55,10 @@ MAX_ATTEMPTS = 3
 DEFAULT_CONFIG = {
     "level": "medium",
     "thresholds": {"strict": 150, "medium": 400, "loose": 1000},
+    # Past the threshold the gate waits for a finished piece of work rather than
+    # cutting in mid-implementation. This multiple is where it stops waiting,
+    # so one very long turn cannot defer the gate indefinitely.
+    "hard_ceiling_multiplier": 2,
     "ignore_globs": [
         "**/node_modules/**",
         "**/.git/**",
@@ -684,10 +688,12 @@ def evaluate_gate(state: dict, cfg: dict) -> bool:
     return dwell_remaining(gate) == 0
 
 
-def arm_gate(state: dict, cfg: dict, lines: int) -> str:
+def arm_gate(state: dict, cfg: dict, lines: int, trigger: str = "threshold") -> str:
     token = secrets.token_hex(3)
     markers = plant_markers(state, cfg, lines, token)
+    state.pop("pending_since", None)
     state["gate"] = {
+        "trigger": trigger,
         "token": token,
         "markers": markers,
         "marker_cleared": False,
@@ -705,6 +711,7 @@ def arm_gate(state: dict, cfg: dict, lines: int) -> str:
         project=state["project"],
         lines=lines,
         level=cfg.get("level"),
+        trigger=trigger,
         markers=[m["file"] for m in markers],
     )
     return armed_message(state, state["gate"], cfg, lines)
@@ -794,19 +801,31 @@ def hook_post_tool(data: dict) -> int:
 
     threshold = threshold_for(cfg)
     current = state["lines_tallied"]
-    # A heads-up before the hard stop, so Claude can finish the unit of work it
-    # is in rather than getting cut off mid-refactor.
-    if not state.get("gate") and threshold * 0.8 <= current < threshold:
+    note = None
+    if state.get("gate"):
+        pass
+    elif state.get("pending_since"):
+        # The gate is queued and will arm the moment this turn ends. Saying so
+        # is what makes the deferral work as intended: finish the piece of work
+        # that is open, and do not open another one.
+        note = (
+            "review-gate: a gate is queued and arms as soon as this turn ends. Finish "
+            "the piece of work already in flight and stop there — do not start anything "
+            "new, and do not pad this turn to defer the gate."
+        )
+    elif threshold * 0.8 <= current < threshold:
+        note = (
+            f"review-gate: {current} of {threshold} lines. The gate queues shortly and "
+            f"arms at the end of whichever turn crosses it — aim to finish a coherent "
+            f"unit of work rather than starting anything large."
+        )
+    if note:
         print(
             json.dumps(
                 {
                     "hookSpecificOutput": {
                         "hookEventName": "PostToolUse",
-                        "additionalContext": (
-                            f"review-gate: {current} of {threshold} lines. The review gate "
-                            f"trips shortly — reach a coherent stopping point rather than "
-                            f"starting anything large."
-                        ),
+                        "additionalContext": note,
                     }
                 }
             )
@@ -825,10 +844,61 @@ def hook_pre_write(data: dict) -> int:
             return allow()
         return deny(stage_message(state, state["gate"], cfg))
 
+    threshold = threshold_for(cfg)
+    lines = measured_lines(state, cfg)
+    if lines < threshold:
+        return allow()
+
+    # Past the threshold, but stopping here would hand the user half an
+    # implementation to review — which teaches them to wave gates through. Go
+    # pending instead and let the Stop hook arm it at the end of the turn, when
+    # the work is at a natural boundary.
+    ceiling = threshold * max(1, cfg.get("hard_ceiling_multiplier", 2))
+    if lines >= ceiling:
+        return deny(arm_gate(state, cfg, lines, trigger="ceiling"))
+
+    if not state.get("pending_since"):
+        state["pending_since"] = now_iso()
+        save_state(state)
+        log_event("gate_pending", project=state["project"], lines=lines, ceiling=ceiling)
+    return allow()
+
+
+def hook_stop(data: dict) -> int:
+    """Turn end — the natural boundary. Arm a pending gate here.
+
+    Never blocks the stop itself; it only converts pending into armed, so the
+    user is handed a finished unit of work to review rather than a fragment.
+    """
+    cfg = load_config()
+    state = load_state(project_for(data.get("cwd", "")))
+    if state.get("gate") or not state.get("pending_since"):
+        return allow()
+
     lines = measured_lines(state, cfg)
     if lines < threshold_for(cfg):
+        # Fell back under (a revert, or a commit rebaselined the count).
+        state.pop("pending_since", None)
+        save_state(state)
         return allow()
-    return deny(arm_gate(state, cfg, lines))
+
+    arm_gate(state, cfg, lines, trigger="turn-end")
+    print(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "Stop",
+                    "additionalContext": (
+                        f"review-gate: the gate has armed now that this piece of work is "
+                        f"finished ({lines} unreviewed lines). Markers are planted and your "
+                        f"writes are blocked until the user reviews. Load the review-gate "
+                        f"skill and run the gate before doing anything else."
+                    ),
+                }
+            }
+        )
+    )
+    return allow()
 
 
 def hook_pre_bash(data: dict) -> int:
@@ -1037,6 +1107,25 @@ def cmd_answer(args) -> int:
     return 1
 
 
+def cmd_checkpoint(args) -> int:
+    """Arm a queued gate now, because a piece of work just finished.
+
+    Only ever makes the gate stricter — it can bring an already-pending gate
+    forward, never defer one. Deferral is the failure mode, and turn-end already
+    covers it.
+    """
+    cfg = load_config()
+    state = load_state(cli_project(args))
+    if state.get("gate"):
+        print(stage_message(state, state["gate"], cfg))
+        return 0
+    if not state.get("pending_since"):
+        print("review-gate: nothing queued — carry on.")
+        return 0
+    print(arm_gate(state, cfg, measured_lines(state, cfg), trigger="checkpoint"))
+    return 0
+
+
 def cmd_status(args) -> int:
     cfg = load_config()
     project = cli_project(args)
@@ -1049,6 +1138,12 @@ def cmd_status(args) -> int:
     print(f"  counting via   : {'git working tree' if state.get('git_root') else 'tool calls'}")
     print(f"  unreviewed     : {lines} lines ({max(0, threshold - lines)} to go)")
     print(f"  gates passed   : {state.get('gates_passed', 0)}")
+    if state.get("pending_since") and not state.get("gate"):
+        ceiling = threshold * max(1, cfg.get("hard_ceiling_multiplier", 2))
+        print(
+            f"  QUEUED         : over threshold, waiting for this piece of work to "
+            f"finish (forced at {ceiling})"
+        )
     if state.get("files") or state.get("git_root"):
         print("  changed:")
         print(file_summary(state, cfg))
@@ -1106,7 +1201,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="gate.py", description="review-gate")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    for name in ("hook-post-tool", "hook-pre-write", "hook-pre-bash", "hook-session-start"):
+    for name in (
+        "hook-post-tool",
+        "hook-pre-write",
+        "hook-pre-bash",
+        "hook-session-start",
+        "hook-stop",
+    ):
         sub.add_parser(name)
 
     quiz = sub.add_parser("arm-quiz")
@@ -1118,7 +1219,7 @@ def main() -> int:
     ans.add_argument("--project")
     ans.add_argument("text")
 
-    for name in ("status", "review"):
+    for name in ("status", "review", "checkpoint"):
         node = sub.add_parser(name)
         node.add_argument("--project")
 
@@ -1132,6 +1233,7 @@ def main() -> int:
         "hook-pre-write": hook_pre_write,
         "hook-pre-bash": hook_pre_bash,
         "hook-session-start": hook_session_start,
+        "hook-stop": hook_stop,
     }
     if args.command in hooks:
         try:
@@ -1146,6 +1248,7 @@ def main() -> int:
         "status": cmd_status,
         "level": cmd_level,
         "review": cmd_review,
+        "checkpoint": cmd_checkpoint,
     }[args.command](args)
 
 

@@ -37,6 +37,22 @@ repo it falls back to tallying your tool calls.
 Practical consequence: you cannot get out from under the counter by changing how
 you write. Don't try; it reads as evasion and it doesn't work.
 
+## Why it fired when it did
+
+Crossing the line threshold does not arm the gate — it *queues* it. The gate arms
+when your turn ends, so the user reviews a finished piece of work instead of half
+an implementation. Half-finished code cannot be judged, and being asked to judge
+it anyway is what teaches someone to approve without looking.
+
+Two consequences for how you work:
+
+- **When a gate is queued, finish what is open and stop.** Do not start anything
+  new, and do not keep going to defer the gate — it arms anyway at twice the
+  threshold, and you will have handed over a worse review.
+- **You can arm it early.** If you have just finished a coherent unit and know
+  more work would muddy it, run `checkpoint --project '<path>'`. This only ever
+  makes the gate stricter.
+
 ## The two stages
 
 Both are always required. There is no configuration that reduces a gate to one

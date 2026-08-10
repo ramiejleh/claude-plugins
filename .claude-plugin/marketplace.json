@@ -5,7 +5,7 @@
     "url": "https://github.com/ramiejleh"
   },
   "metadata": {
-    "description": "Claude Code plugins by Rami Ejleh that keep a human in the loop as the machine speeds up — installable from the ramiejleh/DefyAtrophy GitHub repo.",
+    "description": "Claude Code plugins by Rami Ejleh that keep a human in the loop as the machine speeds up \u2014 installable from the ramiejleh/DefyAtrophy GitHub repo.",
     "version": "1.1.0"
   },
   "plugins": [
@@ -33,8 +33,8 @@
     {
       "name": "review-gate",
       "source": "./review-gate",
-      "description": "Blocks Claude's write tools once it has generated more code than you have reviewed. A hook measures unreviewed change per project \u2014 from the git working tree, so shell writes and subagents count, and the count survives across conversations \u2014 and at a strict (150) / medium (400) / loose (1000) threshold plants marker comments in your source that only you can delete, with Claude's editing tools and shell blocked while it is armed, then asks you a question about the changes. Both stages always apply and there is no skip command.",
-      "version": "1.1.0",
+      "description": "Blocks Claude's write tools once it has generated more code than you have reviewed. A hook measures unreviewed change per project \u2014 from the git working tree, so shell writes and subagents count, and the count survives across conversations. Crossing the strict (150) / medium (400) / loose (1000) threshold queues a gate that arms at the end of the turn, so you review a finished feature rather than half of one; it then plants marker comments in your source that only you can delete, blocks Claude's editing tools and shell while armed, and asks you a question about the changes. Both stages always apply and there is no skip command.",
+      "version": "1.2.0",
       "author": {
         "name": "Rami Ejleh",
         "url": "https://github.com/ramiejleh"

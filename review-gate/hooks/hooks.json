@@ -35,6 +35,17 @@
         ]
       }
     ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/gate.py\" hook-stop",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

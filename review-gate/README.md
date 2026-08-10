@@ -13,6 +13,11 @@ and Claude cannot decline to run it.
 The count is **per project and persists across conversations**, so starting a
 fresh session does not wipe the slate.
 
+It also never cuts in mid-implementation. Crossing the threshold *queues* the
+gate; it arms when Claude finishes the turn, so what you are handed to review is
+a finished piece of work rather than half of one. Reviewing an unfinished feature
+teaches you to wave gates through, which is the one habit this must not build.
+
 ## The gate
 
 When the threshold trips, two things have to happen before writing resumes.
@@ -56,6 +61,22 @@ There is also a short minimum on each gate, scaled to the size of the diff — i
 only rules out the clear that happens faster than anyone could open a file.
 
 Once both stages clear the gate lifts by itself and the counter resets.
+
+## When the gate fires
+
+Three states:
+
+| State | What is happening |
+| --- | --- |
+| **counting** | under the threshold, writes flow normally |
+| **queued** | threshold crossed — writes *still flow* so the current feature can be finished |
+| **armed** | the turn ended, markers are planted, writes and shell are blocked |
+
+The queued state is bounded. One very long turn can't defer the gate forever, so
+it arms mid-flight at `hard_ceiling_multiplier` × the threshold (2× by default —
+800 lines at medium). Claude can also call `checkpoint` to arm a queued gate
+early when it knows it has just finished something coherent; that can only make
+the gate stricter, never later.
 
 ## Levels
 
